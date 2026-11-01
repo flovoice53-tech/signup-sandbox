@@ -59,6 +59,7 @@ export class Sandbox {
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
   private nextId = 1;
   private stopped = false;
+  private exited = false;
   readonly name: string;
 
   private constructor(runId: string, private onProxyEvent: (e: ProxyEvent) => void) {
@@ -90,7 +91,16 @@ export class Sandbox {
     );
     await docker("network", "connect", net, proxyName);
     this.proxy = spawn("docker", ["logs", "-f", proxyName], { stdio: ["ignore", "pipe", "ignore"] });
-    lines(this.proxy, (e) => this.onProxyEvent(e));
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("egress proxy did not start")), 20_000);
+      lines(this.proxy, (e) => {
+        if (e.type === "ready") {
+          clearTimeout(timer);
+          resolve();
+        }
+        this.onProxyEvent(e);
+      });
+    });
 
     this.browser = spawn(
       "docker",
@@ -154,7 +164,10 @@ export class Sandbox {
         if (msg.ok) waiter.resolve(msg.result);
         else waiter.reject(new Error(msg.error));
       });
+      // Writing to a dead process would otherwise raise EPIPE and crash the server.
+      this.browser.stdin!.on("error", () => {});
       this.browser.on("exit", () => {
+        this.exited = true;
         clearTimeout(timer);
         reject(new Error("sandbox browser exited"));
         for (const w of this.pending.values()) w.reject(new Error("sandbox browser exited"));
@@ -165,6 +178,7 @@ export class Sandbox {
 
   send<T = any>(cmd: string, args: Record<string, unknown> = {}): Promise<T> {
     if (this.stopped) return Promise.reject(new Error("sandbox stopped"));
+    if (this.exited) return Promise.reject(new Error("sandbox browser exited"));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {

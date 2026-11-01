@@ -51,6 +51,18 @@ async function sendMail(to: string, subject: string, body: string) {
   await transport.sendMail({ from: FROM, to, subject, text: body });
 }
 
+// Ground truth for the agent's verdict: null when the address never signed
+// up here (another site is under test), otherwise whether it was verified.
+export function demoAccountVerified(email: string): boolean | null {
+  let found: boolean | null = null;
+  for (const a of accounts.values()) {
+    if (a.email.toLowerCase() !== email.toLowerCase()) continue;
+    if (a.verified) return true;
+    found = false;
+  }
+  return found;
+}
+
 // Accounts only need to live for one run.
 setInterval(() => {
   for (const [token, a] of accounts) if (Date.now() - a.createdAt > 60 * 60_000) accounts.delete(token);

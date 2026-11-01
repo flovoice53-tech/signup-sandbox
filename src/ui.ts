@@ -74,13 +74,14 @@ function watch(id, cfg){
   $("log").innerHTML = ""; $("verdict").style.display = "none"; $("shot").style.display = "none";
   history.replaceState(null, "", "?run=" + id);
   source = new EventSource("/api/runs/" + id + "/events");
+  // The server replays the whole run on every (re)connect, so start clean.
+  source.onopen = () => { $("log").innerHTML = ""; };
   source.onmessage = (m) => {
     const data = JSON.parse(m.data);
     if (data.event) addEvent(data.event, id);
     renderStats(data.run, cfg);
-    if (data.run.status !== "running") { source.close(); setBusy(false); loadRecent(cfg); }
+    if (data.end) { source.close(); setBusy(false); loadRecent(cfg); }
   };
-  source.onerror = () => { source.close(); setBusy(false); };
 }
 
 async function loadRecent(cfg){

@@ -51,7 +51,7 @@ async function newMailbox(): Promise<Mailbox> {
   }
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (process.env.RECEIVEMAIL_API_KEY) headers.authorization = `Bearer ${process.env.RECEIVEMAIL_API_KEY}`;
-  const res = await fetch(`${RECEIVEMAIL}/mailboxes`, { method: "POST", headers, body: JSON.stringify({ ttlMinutes: 30 }) });
+  const res = await fetch(`${RECEIVEMAIL}/mailboxes`, { method: "POST", headers, body: JSON.stringify({ ttlMinutes: 30 }), signal: AbortSignal.timeout(15_000) });
   if (!res.ok) throw new Error(`receivemail: ${res.status} ${await res.text()}`);
   const { address, secret } = (await res.json()) as Mailbox;
   return { address, secret };
@@ -70,7 +70,7 @@ export async function waitForMail(box: Mailbox, since: string, timeoutMs: number
     const seconds = Math.max(1, Math.min(25, Math.floor((deadline - Date.now()) / 1000)));
     const res = await fetch(
       `${RECEIVEMAIL}/mailboxes/${encodeURIComponent(box.address)}/wait?timeout=${seconds}&since=${encodeURIComponent(since)}`,
-      { headers: { authorization: `Bearer ${box.secret}` } },
+      { headers: { authorization: `Bearer ${box.secret}` }, signal: AbortSignal.timeout((seconds + 10) * 1000) },
     );
     if (!res.ok) throw new Error(`receivemail: ${res.status}`);
     const data = (await res.json()) as {
@@ -86,10 +86,14 @@ export async function waitForMail(box: Mailbox, since: string, timeoutMs: number
 }
 
 // Pulls what a verification email usually carries: a short numeric code
-// and/or a link. The agent decides which one the flow needs.
+// and/or a link. Footers are full of other numbers (years, addresses) and
+// links (logo, unsubscribe), so prefer the ones that look like verification.
 export function extractVerification(mail: Mail) {
   const text = `${mail.subject}\n${mail.body}`;
-  const code = text.match(/\b(\d{4,8})\b/)?.[1] ?? null;
-  const link = mail.body.match(/https?:\/\/[^\s"'<>]+/)?.[0] ?? null;
-  return { code, link };
+  const nearWord = text.match(/(?:code|pin|otp|verification|verify)\D{0,30}?\b(\d{4,8})\b/i)?.[1];
+  const anyCode = [...text.matchAll(/\b(\d{4,8})\b/g)].map((m) => m[1]).find((n) => !/^(19|20)\d{2}$/.test(n));
+  const links = mail.body.match(/https?:\/\/[^\s"'<>]+/g) ?? [];
+  const verifyLink = links.find((l) => /verif|confirm|activat|token|magic|signup|register/i.test(l));
+  const link = verifyLink ?? links.find((l) => !/unsubscribe|privacy|terms|logo|\.(png|jpe?g|gif|svg)(\?|$)/i.test(l)) ?? null;
+  return { code: nearWord ?? anyCode ?? null, link };
 }

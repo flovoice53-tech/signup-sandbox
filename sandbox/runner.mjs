@@ -51,6 +51,7 @@ async function observe() {
     const elements = [];
     let n = 0;
     for (const el of nodes) {
+      if (elements.length >= 80) break;
       if (!visible(el)) continue;
       const ref = `e${++n}`;
       el.setAttribute("data-sbx-ref", ref);
@@ -113,7 +114,12 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     continue;
   }
   try {
-    reply({ id: msg.id, ok: true, result: await run(msg) });
+    // A hostile page can hang the tab (e.g. an endless loop); answer with an
+    // error instead of going silent.
+    let timer;
+    const deadline = new Promise((_, reject) => (timer = setTimeout(() => reject(new Error(`${msg.cmd} timed out`)), 20000)));
+    const result = await Promise.race([run(msg), deadline]).finally(() => clearTimeout(timer));
+    reply({ id: msg.id, ok: true, result });
   } catch (err) {
     reply({ id: msg.id, ok: false, error: String(err?.message ?? err).split("\n")[0].slice(0, 300) });
   }

@@ -142,7 +142,8 @@ async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
   runs.set(run.id, run);
   executeRun(run, emitFor(run)).finally(async () => {
     await writeFile(path.join(DATA_DIR, run.id, "run.json"), JSON.stringify(run)).catch(() => {});
-    for (const l of listeners.get(run.id) ?? []) l.end();
+    // Sent after teardown, so viewers see "Sandbox destroyed" before the stream closes.
+    for (const l of listeners.get(run.id) ?? []) l.end(`data: ${JSON.stringify({ run: summary(run), end: true })}\n\n`);
     listeners.delete(run.id);
   });
   json(res, 201, { id: run.id });
@@ -152,13 +153,17 @@ function streamEvents(run: Run, req: http.IncomingMessage, res: http.ServerRespo
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", "x-accel-buffering": "no" });
   for (const event of run.events) res.write(`data: ${JSON.stringify({ event, run: summary(run) })}\n\n`);
   if (run.status !== "running") {
-    res.write(`data: ${JSON.stringify({ run: summary(run) })}\n\n`);
-    return res.end();
+    return res.end(`data: ${JSON.stringify({ run: summary(run), end: true })}\n\n`);
   }
   const set = listeners.get(run.id) ?? new Set();
   set.add(res);
   listeners.set(run.id, set);
-  req.on("close", () => set.delete(res));
+  // Keeps proxies from closing the stream during the long email wait.
+  const heartbeat = setInterval(() => res.write(": keep-alive\n\n"), 15_000);
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    set.delete(res);
+  });
 }
 
 const server = http.createServer(async (req, res) => {
