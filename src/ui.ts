@@ -25,6 +25,9 @@ main{max-width:1200px;margin:0 auto;padding:16px 24px 48px}
 #verdict.passed{background:#123222;border:1px solid var(--ok)}#verdict.failed{background:#33240f;border:1px solid var(--warn)}#verdict.error{background:#331416;border:1px solid var(--bad)}
 .how{color:var(--muted);font-size:13px;margin-top:28px;max-width:860px}.how b{color:var(--text)}
 code{background:#202636;padding:1px 5px;border-radius:4px}
+#recent{margin-top:20px}#recent h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
+.run{display:flex;gap:10px;align-items:center;padding:7px 10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;margin:5px 0;cursor:pointer;font-size:13px;color:inherit;width:100%;text-align:left;font-family:inherit}
+.run:hover{border-color:var(--accent)}.run .st{font-weight:600;min-width:60px}.run .st.passed{color:var(--ok)}.run .st.failed{color:var(--warn)}.run .st.error{color:var(--bad)}.run .st.running{color:var(--accent)}.run .m{color:var(--muted)}
 </style></head><body>
 <header><h1>Signup Sandbox</h1>
 <p>An AI agent signs up on a website like a new user would, confirms the email with a real inbox, and tells you where the flow breaks. Every browser action runs in a disposable sandbox on Vultr that can only reach the site under test.</p></header>
@@ -36,6 +39,7 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
   <div class="panel"><h2>What the agent does</h2><div id="log"><div class="ev"><span class="k">ready</span>Pick a flow above to start a run.</div></div></div>
   <div class="panel"><h2>What the sandboxed browser sees</h2><img id="shot" alt="Sandbox browser screenshot"></div>
 </div>
+<div id="recent"></div>
 <div class="how"><p><b>Containment.</b> Each run gets its own isolated Docker network. The browser container has no capabilities, a read-only filesystem, memory/CPU/process limits and no secrets; its only way out is an egress proxy that allows the site under test and refuses private addresses, including the cloud metadata service. The model's actions are checked against the same policy before they run. When the run ends, the browser, the proxy and the network are deleted.</p>
 <p><b>Secrets stay outside.</b> The test inbox (receivemail.dev) is read by the orchestrator, not the browser, and the model only ever sees placeholders such as <code>{{password}}</code>.</p></div>
 </main>
@@ -74,9 +78,18 @@ function watch(id, cfg){
     const data = JSON.parse(m.data);
     if (data.event) addEvent(data.event, id);
     renderStats(data.run, cfg);
-    if (data.run.status !== "running") { source.close(); setBusy(false); }
+    if (data.run.status !== "running") { source.close(); setBusy(false); loadRecent(cfg); }
   };
   source.onerror = () => { source.close(); setBusy(false); };
+}
+
+async function loadRecent(cfg){
+  const list = await (await fetch("/api/runs")).json();
+  if (!list.length) { $("recent").innerHTML = ""; return; }
+  const label = (url) => { const key = url.split("/").pop(); return (cfg.targets[key] && cfg.targets[key].label) || url; };
+  $("recent").innerHTML = '<h2>Recent runs</h2>' + list.slice(0, 8).map(r =>
+    '<button class="run" data-id="'+esc(r.id)+'"><span class="st '+esc(r.status)+'">'+esc(r.status)+'</span><span>'+esc(label(r.targetUrl))+'</span><span class="m">'+esc(r.steps)+' steps · '+esc(r.blockedRequests)+' blocked · '+esc(new Date(r.startedAt).toLocaleString())+'</span></button>').join("");
+  document.querySelectorAll(".run").forEach(b => b.onclick = () => { watch(b.dataset.id, cfg); window.scrollTo({top:0, behavior:"smooth"}); });
 }
 
 function setBusy(b){ document.querySelectorAll(".target").forEach(t => t.disabled = b); }
@@ -92,6 +105,7 @@ function setBusy(b){ document.querySelectorAll(".target").forEach(t => t.disable
     if (!res.ok) { setBusy(false); $("log").innerHTML = '<div class="ev error">'+esc(data.error)+'</div>'; return; }
     watch(data.id, cfg);
   });
+  loadRecent(cfg);
   const existing = new URLSearchParams(location.search).get("run");
   if (existing) watch(existing, cfg);
 })();

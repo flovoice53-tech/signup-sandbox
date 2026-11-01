@@ -13,6 +13,9 @@ import { UI_HTML } from "./ui.ts";
 const PORT = Number(process.env.PORT ?? 4000);
 const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 2);
 const RUNS_PER_IP_PER_HOUR = Number(process.env.RUNS_PER_IP_PER_HOUR ?? 6);
+// Every run costs model tokens and a demo email, so the public demo has a daily ceiling.
+const RUNS_PER_DAY = Number(process.env.RUNS_PER_DAY ?? 150);
+const MAX_BODY_BYTES = 8 * 1024;
 
 export const TARGETS: Record<string, { label: string; description: string }> = {
   acme: { label: "Working signup", description: "Form, emailed 6-digit code, welcome page." },
@@ -23,6 +26,17 @@ export const TARGETS: Record<string, { label: string; description: string }> = {
 const runs = new Map<string, Run>();
 const listeners = new Map<string, Set<http.ServerResponse>>();
 const recentByIp = new Map<string, number[]>();
+let runDay = "";
+let runsToday = 0;
+
+setInterval(() => {
+  const hourAgo = Date.now() - 3600_000;
+  for (const [key, times] of recentByIp) {
+    const kept = times.filter((t) => t > hourAgo);
+    if (kept.length) recentByIp.set(key, kept);
+    else recentByIp.delete(key);
+  }
+}, 10 * 60_000).unref();
 
 async function loadHistory() {
   if (!existsSync(DATA_DIR)) return;
@@ -48,9 +62,28 @@ function summary(run: Run) {
   return rest;
 }
 
+// Caddy appends the real client address as the last X-Forwarded-For entry.
 function clientIp(req: http.IncomingMessage) {
-  return (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0].trim() || req.socket.remoteAddress || "";
+  return (req.headers["x-forwarded-for"] as string | undefined)?.split(",").pop()?.trim() || req.socket.remoteAddress || "";
 }
+
+// IPv6 users usually control a whole /64, so that is the unit we limit.
+function rateKey(ip: string) {
+  if (!ip.includes(":") || ip.startsWith("::ffff:")) return ip.replace(/^::ffff:/, "");
+  const groups = ip.split("::")[0].split(":");
+  return groups.slice(0, 4).join(":") + "::/64";
+}
+
+async function readBody(req: http.IncomingMessage) {
+  let raw = "";
+  for await (const chunk of req) {
+    raw += chunk;
+    if (raw.length > MAX_BODY_BYTES) throw new Error("body too large");
+  }
+  return raw;
+}
+
+const isDemoRun = (run: Run) => run.targetUrl.startsWith(`${DEMO_URL}/`);
 
 function json(res: http.ServerResponse, status: number, body: unknown) {
   res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
@@ -59,11 +92,9 @@ function json(res: http.ServerResponse, status: number, body: unknown) {
 async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
   let body: { target?: string; url?: string; token?: string } = {};
   try {
-    let raw = "";
-    for await (const c of req) raw += c;
-    body = JSON.parse(raw || "{}");
+    body = JSON.parse((await readBody(req)) || "{}");
   } catch {
-    return json(res, 400, { error: "invalid JSON" });
+    return json(res, 400, { error: "invalid request body" });
   }
 
   let targetUrl: string;
@@ -82,14 +113,21 @@ async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
     return json(res, 400, { error: `target must be one of: ${Object.keys(TARGETS).join(", ")}` });
   }
 
-  const ip = clientIp(req);
+  const key = rateKey(clientIp(req));
   const hourAgo = Date.now() - 3600_000;
-  const recent = (recentByIp.get(ip) ?? []).filter((t) => t > hourAgo);
-  if (recent.length >= RUNS_PER_IP_PER_HOUR) return json(res, 429, { error: "Too many runs from your address; try again later." });
+  const recent = (recentByIp.get(key) ?? []).filter((t) => t > hourAgo);
+  if (recent.length >= RUNS_PER_IP_PER_HOUR) return json(res, 429, { error: "Too many runs from your network; try again later, or watch a recent run below." });
+  const today = new Date().toISOString().slice(0, 10);
+  if (today !== runDay) {
+    runDay = today;
+    runsToday = 0;
+  }
+  if (runsToday >= RUNS_PER_DAY) return json(res, 429, { error: "The demo has reached today's run limit; watch a recent run below." });
   const active = [...runs.values()].filter((r) => r.status === "running").length;
-  if (active >= MAX_CONCURRENT) return json(res, 503, { error: "All sandboxes are busy; try again in a minute." });
+  if (active >= MAX_CONCURRENT) return json(res, 503, { error: "All sandboxes are busy; try again in a minute, or watch a recent run below." });
   recent.push(Date.now());
-  recentByIp.set(ip, recent);
+  recentByIp.set(key, recent);
+  runsToday++;
 
   const run: Run = {
     id: newRunId(),
@@ -135,7 +173,12 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === "/api/runs" && req.method === "POST") return startRun(req, res);
     if (url.pathname === "/api/runs" && req.method === "GET") {
-      const list = [...runs.values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt)).slice(0, 20).map(summary);
+      // Only demo runs are listed; operator runs against other sites stay out of the public history.
+      const list = [...runs.values()]
+        .filter(isDemoRun)
+        .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+        .slice(0, 20)
+        .map(summary);
       return json(res, 200, list);
     }
     if (parts[0] === "api" && parts[1] === "runs" && parts[2]) {

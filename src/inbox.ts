@@ -13,12 +13,37 @@ export const INBOX_MODE = process.env.INBOX === "local" ? "local" : "receivemail
 
 const localMail = new Map<string, Mail[]>();
 
+// Addresses this process created, with their expiry. The demo sites only
+// email these, so they can't be used to send mail to anyone else.
+const ourMailboxes = new Map<string, number>();
+const MAILBOX_TTL_MS = 30 * 60_000;
+
+export function isOurMailbox(address: string) {
+  const expires = ourMailboxes.get(address.toLowerCase());
+  return expires !== undefined && expires > Date.now();
+}
+
+setInterval(() => {
+  for (const [address, expires] of ourMailboxes) {
+    if (expires < Date.now()) {
+      ourMailboxes.delete(address);
+      localMail.delete(address);
+    }
+  }
+}, 5 * 60_000).unref();
+
 export function deliverLocal(to: string, mail: Omit<Mail, "receivedAt">) {
   const list = localMail.get(to.toLowerCase());
   if (list) list.push({ ...mail, receivedAt: new Date().toISOString() });
 }
 
 export async function createMailbox(): Promise<Mailbox> {
+  const box = await newMailbox();
+  ourMailboxes.set(box.address.toLowerCase(), Date.now() + MAILBOX_TTL_MS);
+  return box;
+}
+
+async function newMailbox(): Promise<Mailbox> {
   if (INBOX_MODE === "local") {
     const address = `agent-${Math.random().toString(36).slice(2, 10)}@inbox.local`;
     localMail.set(address, []);

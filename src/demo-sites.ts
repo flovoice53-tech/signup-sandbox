@@ -8,7 +8,7 @@
 import http from "node:http";
 import { randomBytes, randomInt } from "node:crypto";
 import nodemailer from "nodemailer";
-import { INBOX_MODE, deliverLocal } from "./inbox.ts";
+import { INBOX_MODE, deliverLocal, isOurMailbox } from "./inbox.ts";
 
 type Site = "acme" | "broken" | "trap";
 type Account = { site: Site; name: string; email: string; code: string; token: string; verified: boolean; createdAt: number };
@@ -18,11 +18,36 @@ export const DEMO_URL = (process.env.DEMO_PUBLIC_URL ?? `http://localhost:${PORT
 const FROM = process.env.DEMO_FROM ?? "Acme Notes <no-reply@example.com>";
 
 const accounts = new Map<string, Account>();
-const transport = process.env.SMTP_URL ? nodemailer.createTransport(process.env.SMTP_URL) : null;
+function smtpTransport(raw: string) {
+  const u = new URL(raw);
+  return nodemailer.createTransport({
+    host: u.hostname,
+    port: Number(u.port || (u.protocol === "smtps:" ? 465 : 587)),
+    secure: u.protocol === "smtps:",
+    auth: { user: decodeURIComponent(u.username), pass: decodeURIComponent(u.password) },
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 20_000,
+  });
+}
+const transport = process.env.SMTP_URL ? smtpTransport(process.env.SMTP_URL) : null;
+
+// A cap on what the demo sites send per day, so the email quota they share
+// with other apps can't be used up even by legitimate runs.
+const EMAILS_PER_DAY = Number(process.env.DEMO_EMAILS_PER_DAY ?? 80);
+let emailDay = "";
+let emailsToday = 0;
 
 async function sendMail(to: string, subject: string, body: string) {
   if (INBOX_MODE === "local") return deliverLocal(to, { from: FROM, subject, body });
   if (!transport) throw new Error("SMTP_URL is not set");
+  const today = new Date().toISOString().slice(0, 10);
+  if (today !== emailDay) {
+    emailDay = today;
+    emailsToday = 0;
+  }
+  if (emailsToday >= EMAILS_PER_DAY) throw new Error("daily demo email limit reached");
+  emailsToday++;
   await transport.sendMail({ from: FROM, to, subject, text: body });
 }
 
@@ -115,10 +140,15 @@ async function handle(req: http.IncomingMessage, res: http.ServerResponse) {
 
   if (step === "signup" && req.method === "POST") {
     const form = await readForm(req);
-    const name = (form.get("name") ?? "").trim();
+    const name = (form.get("name") ?? "").trim().slice(0, 60);
     const email = (form.get("email") ?? "").trim();
     if (!name || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || (form.get("password") ?? "").length < 8 || !form.get("terms")) {
       return send(res, 400, signupForm(site, "Please fill in every field and accept the terms."));
+    }
+    // These sites exist for the agent: they only email the test inboxes
+    // Signup Sandbox itself created, never an address typed by a visitor.
+    if (!isOurMailbox(email)) {
+      return send(res, 400, signupForm(site, "This demo site only sends email to Signup Sandbox test inboxes. Start a run at the Signup Sandbox page to try it."));
     }
     const account: Account = { site, name, email, code: String(randomInt(100000, 1000000)), token: randomBytes(12).toString("hex"), verified: false, createdAt: Date.now() };
     accounts.set(account.token, account);
