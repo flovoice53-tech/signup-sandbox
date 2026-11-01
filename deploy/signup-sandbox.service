@@ -1,0 +1,18 @@
+[Unit]
+Description=Signup Sandbox
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+User=sbx
+WorkingDirectory=/opt/signup-sandbox
+EnvironmentFile=/opt/signup-sandbox/.env
+ExecStart=/usr/bin/node node_modules/.bin/tsx src/server.ts
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
