@@ -28,22 +28,25 @@ function log(event) {
   process.stdout.write(JSON.stringify({ ...event, at: new Date().toISOString() }) + "\n");
 }
 
+// Everything that isn't ordinary public unicast: loopback, private, link-local
+// (incl. cloud metadata 169.254.169.254), CGNAT, multicast, NAT64/6to4
+// wrappers that can point back at private IPv4, and so on.
+const blocked = new net.BlockList();
+for (const [prefix, bits] of [
+  ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16], ["172.16.0.0", 12],
+  ["192.0.0.0", 24], ["192.0.2.0", 24], ["192.168.0.0", 16], ["198.18.0.0", 15], ["198.51.100.0", 24], ["203.0.113.0", 24], ["224.0.0.0", 3],
+]) blocked.addSubnet(prefix, bits, "ipv4");
+for (const [prefix, bits] of [
+  // Node's BlockList also matches IPv4 addresses against IPv6 ranges that
+  // embed IPv4 (::/96, ::ffff:0:0/96), so those are handled in isPrivate.
+  ["::", 128], ["::1", 128], ["64:ff9b::", 96], ["100::", 64], ["2001::", 32], ["2001:db8::", 32], ["2002::", 16],
+  ["fc00::", 7], ["fe80::", 10], ["fec0::", 10], ["ff00::", 8],
+]) blocked.addSubnet(prefix, bits, "ipv6");
+
 function isPrivate(ip) {
-  if (net.isIPv4(ip)) {
-    const [a, b] = ip.split(".").map(Number);
-    return (
-      a === 0 || a === 10 || a === 127 ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 198 && (b === 18 || b === 19)) ||
-      a >= 224
-    );
-  }
-  const v6 = ip.toLowerCase();
-  if (v6.startsWith("::ffff:")) return isPrivate(v6.slice(7));
-  return v6 === "::" || v6 === "::1" || v6.startsWith("fc") || v6.startsWith("fd") || v6.startsWith("fe80") || v6.startsWith("ff");
+  const embedded = ip.toLowerCase().match(/^::(?:ffff:)?(\d+\.\d+\.\d+\.\d+)$/);
+  if (embedded) return blocked.check(embedded[1], "ipv4");
+  return blocked.check(ip, net.isIPv6(ip) ? "ipv6" : "ipv4");
 }
 
 // Returns the address to connect to, or a reason the request is refused.
@@ -67,6 +70,10 @@ const server = http.createServer(async (req, res) => {
   try {
     url = new URL(req.url);
   } catch {
+    res.writeHead(400).end();
+    return;
+  }
+  if (url.protocol !== "http:") {
     res.writeHead(400).end();
     return;
   }

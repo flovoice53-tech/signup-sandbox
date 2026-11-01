@@ -31,7 +31,8 @@ export const LIMITS = {
 
 const docker = (...args: string[]) => run("docker", args, { timeout: 30_000 });
 
-// Removes anything a crashed process left behind; called once at startup.
+// Removes anything a crashed process left behind: at startup, and then every
+// few minutes for sandboxes older than any run can last.
 export async function cleanupStale() {
   if (DRIVER !== "docker") return;
   const { stdout: ids } = await docker("ps", "-aq", "--filter", "label=sbx=1");
@@ -51,6 +52,26 @@ function lines(child: ChildProcess, onLine: (value: any) => void) {
       // not ours (e.g. a library warning)
     }
   });
+}
+
+export function startJanitor(maxAgeMs: number) {
+  if (DRIVER !== "docker") return;
+  setInterval(async () => {
+    try {
+      const { stdout } = await docker("ps", "-a", "--filter", "label=sbx=1", "--format", "{{.Names}} {{.CreatedAt}}");
+      const old = stdout
+        .trim()
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => line.split(" "))
+        .filter(([, ...created]) => Date.now() - Date.parse(created.slice(0, 3).join(" ")) > maxAgeMs)
+        .map(([name]) => name);
+      if (old.length) await docker("rm", "-f", ...old);
+      for (const name of new Set(old.map((n) => n.replace(/-(proxy|browser)$/, "")))) await docker("network", "rm", name).catch(() => {});
+    } catch {
+      // next round
+    }
+  }, 5 * 60_000).unref();
 }
 
 export class Sandbox {

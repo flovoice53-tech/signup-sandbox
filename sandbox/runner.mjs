@@ -9,7 +9,14 @@ const browser = await chromium.launch({
   proxy: process.env.PROXY_URL ? { server: process.env.PROXY_URL } : undefined,
   // <-loopback> stops Chromium from silently bypassing the proxy for
   // localhost, so even loopback requests hit the egress policy.
-  args: ["--disable-dev-shm-usage", "--proxy-bypass-list=<-loopback>"],
+  // WebRTC is told to use only proxied connections, so no UDP leaves the
+  // page outside the egress policy.
+  args: [
+    "--disable-dev-shm-usage",
+    "--proxy-bypass-list=<-loopback>",
+    "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+    "--webrtc-ip-handling-policy=disable_non_proxied_udp",
+  ],
 });
 const context = await browser.newContext({
   acceptDownloads: false,
@@ -73,8 +80,17 @@ const target = (ref) => page.locator(`[data-sbx-ref="${ref}"]`).first();
 
 const commands = {
   async goto({ url }) {
-    const res = await page.goto(url, { timeout: 15000, waitUntil: "domcontentloaded" });
-    return { status: res?.status() ?? null };
+    // A blocked navigation can still be settling; one retry gets past
+    // "interrupted by another navigation".
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const res = await page.goto(url, { timeout: 15000, waitUntil: "domcontentloaded" });
+        return { status: res?.status() ?? null };
+      } catch (err) {
+        if (attempt > 0 || !/interrupted by another navigation/.test(String(err))) throw err;
+        await page.waitForTimeout(1000);
+      }
+    }
   },
   async fill({ ref, value }) {
     await target(ref).fill(String(value), { timeout: ACTION_TIMEOUT });

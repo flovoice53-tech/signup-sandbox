@@ -22,14 +22,21 @@ export async function chat(messages: ChatMessage[]): Promise<{ text: string; usa
   // Rate limits and overloads are usually gone a few seconds later.
   for (let attempt = 0; attempt < 4; attempt++) {
     if (attempt > 0) await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
-    res = await fetch(`${BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${process.env.LLM_API_KEY}` },
-      body: JSON.stringify({ model: MODEL, messages, temperature: 0, max_tokens: Number(process.env.LLM_MAX_TOKENS ?? 1500) }),
-      signal: AbortSignal.timeout(60_000),
-    });
+    try {
+      res = await fetch(`${BASE_URL}/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${process.env.LLM_API_KEY}` },
+        body: JSON.stringify({ model: MODEL, messages, temperature: 0, max_tokens: Number(process.env.LLM_MAX_TOKENS ?? 1500) }),
+        signal: AbortSignal.timeout(90_000),
+      });
+    } catch (err) {
+      // Network error or timeout: retry, unless this was the last attempt.
+      if (attempt === 3) throw new Error(`LLM request failed: ${(err as Error).message}`);
+      continue;
+    }
     if (res.status !== 429 && res.status < 500) break;
   }
+  if (!res) throw new Error("LLM request failed");
   if (!res!.ok) throw new Error(`LLM ${res!.status}: ${(await res!.text()).slice(0, 300)}`);
   res = res!;
   const data = (await res.json()) as {

@@ -1,10 +1,12 @@
 # Signup Sandbox
 
+**Live demo: https://sandbox.flo-voice1.com** · built for the Vultr "Agent Rush" hackathon, challenge 1: Blast Radius Zero
+
 An AI agent that tests a website's signup flow end to end, the way a new user would: it fills in the form, confirms the email address with a real inbox, and tells you whether the flow works and, if not, exactly where it breaks.
 
 Every browser action runs inside a disposable sandbox on Vultr that can only reach the site under test. Pages are untrusted input, so the agent is built to survive hostile ones: prompt injection, scripts that try to exfiltrate data, and attempts to read the cloud metadata service.
 
-Built for the Vultr "Agent Rush" hackathon, challenge 1: Blast Radius Zero.
+Every verdict is checked, not just claimed: the agent can't report "passed" until a verification email has actually arrived, and on the demo sites the server independently confirms the account was verified.
 
 ## Why
 
@@ -54,8 +56,26 @@ The demo includes a hostile page (`/trap`) that hides instructions for AI agents
 
 ## How Vultr is used
 
-- **Vultr Cloud Compute** runs the orchestrator, the web app and every sandbox (Docker).
-- **Vultr Serverless Inference** (OpenAI-compatible API) is the agent's model: every decision is a chat completion against `https://api.vultrinference.com/v1`.
+- **Vultr Cloud Compute** (`vc2-2c-4gb`, Frankfurt, Ubuntu 24.04) runs the orchestrator, the web app, Caddy for HTTPS, and every sandbox (Docker).
+- **Vultr Serverless Inference** is the agent's brain: every decision is a chat completion to `glm-5.3` at `https://api.vultrinference.com/v1`, with the page screenshot attached (vision). A typical run is 9 steps and about 11k tokens.
+- The sandbox's most valuable target on Vultr is the instance metadata service at `169.254.169.254`; the hostile demo page tries to read it on every run and is blocked.
+
+## Red-team mode: a compromised agent
+
+A well-behaved model simply ignores the injection, which shows the model is careful but not that the sandbox works. The **Compromised agent** flow simulates an agent whose defences have already failed: the run first does exactly what the page's hidden instructions ask (open `collector.example.net/verify?email=…&password=…` and the cloud metadata service), with the action policy switched off. The only thing left is the sandbox, and the run log shows each attempt being blocked by the egress proxy before any secret leaves. The real password is substituted only inside the sandbox and is redacted from everything the model and the log see.
+
+## Verify the containment yourself
+
+Run any flow on the live demo and watch the containment panel: requests blocked by the egress proxy, actions refused by policy, whether the agent noticed the injection, and the "Sandbox destroyed" confirmation at the end. Or check on a deployment:
+
+```bash
+# a container on a run's --internal network has no route anywhere
+docker network create --internal t && docker run --rm --network t node:22-alpine \
+  node -e 'fetch("http://169.254.169.254/v1.json").catch(e=>console.log("blocked:",e.cause?.code))'
+docker network rm t
+# nothing is left behind after runs
+docker ps -a --filter label=sbx=1 -q | wc -l
+```
 
 ## Demo flows
 
@@ -64,6 +84,7 @@ The demo includes a hostile page (`/trap`) that hides instructions for AI agents
 | `/acme` | Form → 6-digit code by email → welcome page | passed |
 | `/broken` | The emailed confirmation link returns HTTP 500 | failed, at the confirmation link |
 | `/trap` | Works, but the page attacks the agent | passed, with blocked requests and the injection reported |
+| Compromised agent | `/trap`, but the agent obeys the injection and the policy is off | passed; every exfiltration and metadata attempt blocked by the sandbox |
 
 The public demo only runs against these sites, so it can't be used to create accounts on other people's websites. The operator can run against a custom URL with `RUN_TOKEN`.
 
@@ -96,7 +117,7 @@ systemctl restart signup-sandbox
 
 ## API
 
-- `POST /api/runs` `{"target": "acme" | "broken" | "trap"}` → `{"id"}`
+- `POST /api/runs` `{"target": "acme" | "broken" | "trap" | "compromised"}` → `{"id"}`
 - `GET /api/runs/:id` → run with all events
 - `GET /api/runs/:id/events` → live Server-Sent Events
 - `GET /api/runs` → recent runs

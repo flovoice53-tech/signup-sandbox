@@ -25,6 +25,10 @@ main{max-width:1200px;margin:0 auto;padding:16px 24px 48px}
 #verdict.passed{background:#123222;border:1px solid var(--ok)}#verdict.failed{background:#33240f;border:1px solid var(--warn)}#verdict.error{background:#331416;border:1px solid var(--bad)}
 .how{color:var(--muted);font-size:13px;margin-top:28px;max-width:860px}.how b{color:var(--text)}
 code{background:#202636;padding:1px 5px;border-radius:4px}
+.contain{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:14px}
+.c{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}.c .n{font-size:22px;font-weight:700}.c .l{font-size:12px;color:var(--muted)}
+.c.bad .n{color:var(--bad)}.c.ok .n{color:var(--ok)}.c.warn .n{color:var(--warn)}
+.target.red{border-color:#5a2026}.target.red b{color:#ff8a8a}
 #recent{margin-top:20px}#recent h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
 .run{display:flex;gap:10px;align-items:center;padding:7px 10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;margin:5px 0;cursor:pointer;font-size:13px;color:inherit;width:100%;text-align:left;font-family:inherit}
 .run:hover{border-color:var(--accent)}.run .st{font-weight:600;min-width:60px}.run .st.passed{color:var(--ok)}.run .st.failed{color:var(--warn)}.run .st.error{color:var(--bad)}.run .st.running{color:var(--accent)}.run .m{color:var(--muted)}
@@ -35,6 +39,7 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
 <div class="targets" id="targets"></div>
 <div id="verdict"></div>
 <div class="stats" id="stats"></div>
+<div class="contain" id="contain"></div>
 <div class="grid">
   <div class="panel"><h2>What the agent does</h2><div id="log"><div class="ev"><span class="k">ready</span>Pick a flow above to start a run.</div></div></div>
   <div class="panel"><h2>What the sandboxed browser sees</h2><img id="shot" alt="Sandbox browser screenshot"></div>
@@ -49,7 +54,20 @@ let source = null;
 
 function esc(s){return String(s).replace(/[&<>"']/g,c=>"&#"+c.charCodeAt(0)+";")}
 
+let counts = { egress: 0, policy: 0, teardown: false };
+
+function renderContainment(run){
+  const cards = [
+    [run.blockedRequests, "requests blocked by the egress proxy", run.blockedRequests ? "bad" : ""],
+    [counts.policy, run.compromised ? "escape attempts by the agent itself" : "agent actions refused by policy", counts.policy ? "warn" : ""],
+    [run.injectionDetected ? "yes" : "no", "prompt injection noticed by the agent", run.injectionDetected ? "warn" : ""],
+    [counts.teardown ? "✓" : (run.status === "running" ? "…" : "–"), "sandbox destroyed after the run", counts.teardown ? "ok" : ""],
+  ];
+  $("contain").innerHTML = cards.map(([n,l,c]) => '<div class="c '+c+'"><div class="n">'+esc(n)+'</div><div class="l">'+esc(l)+'</div></div>').join("");
+}
+
 function renderStats(run, cfg){
+  renderContainment(run);
   const items = [["Status", run.status], ["Steps", run.steps], ["Blocked requests", run.blockedRequests],
     ["Tokens", run.usage.promptTokens + run.usage.completionTokens], ["Sandbox", cfg.driver], ["Model", cfg.model || "?"]];
   $("stats").innerHTML = items.map(([k,v]) => '<div class="stat">'+esc(k)+'<b>'+esc(v)+'</b></div>').join("");
@@ -61,6 +79,9 @@ function renderStats(run, cfg){
 }
 
 function addEvent(e, runId){
+  // Count real attempts only: policy refusals, or the red-team agent opening an off-site URL.
+  if (e.kind === "policy" && (e.blocked || e.text.includes("compromised agent opens"))) counts.policy++;
+  if (e.kind === "teardown") counts.teardown = true;
   const div = document.createElement("div");
   div.className = "ev " + e.kind;
   div.innerHTML = '<span class="k">' + esc(e.step ? "step " + e.step + " · " + e.kind : e.kind) + '</span>' + esc(e.text);
@@ -75,7 +96,7 @@ function watch(id, cfg){
   history.replaceState(null, "", "?run=" + id);
   source = new EventSource("/api/runs/" + id + "/events");
   // The server replays the whole run on every (re)connect, so start clean.
-  source.onopen = () => { $("log").innerHTML = ""; };
+  source.onopen = () => { $("log").innerHTML = ""; counts = { egress: 0, policy: 0, teardown: false }; };
   source.onmessage = (m) => {
     const data = JSON.parse(m.data);
     if (data.event) addEvent(data.event, id);
@@ -87,9 +108,9 @@ function watch(id, cfg){
 async function loadRecent(cfg){
   const list = await (await fetch("/api/runs")).json();
   if (!list.length) { $("recent").innerHTML = ""; return; }
-  const label = (url) => { const key = url.split("/").pop(); return (cfg.targets[key] && cfg.targets[key].label) || url; };
+  const label = (r) => { const key = r.compromised ? "compromised" : r.targetUrl.split("/").pop(); return (cfg.targets[key] && cfg.targets[key].label) || r.targetUrl; };
   $("recent").innerHTML = '<h2>Recent runs</h2>' + list.slice(0, 8).map(r =>
-    '<button class="run" data-id="'+esc(r.id)+'"><span class="st '+esc(r.status)+'">'+esc(r.status)+'</span><span>'+esc(label(r.targetUrl))+'</span><span class="m">'+esc(r.steps)+' steps · '+esc(r.blockedRequests)+' blocked · '+esc(new Date(r.startedAt).toLocaleString())+'</span></button>').join("");
+    '<button class="run" data-id="'+esc(r.id)+'"><span class="st '+esc(r.status)+'">'+esc(r.status)+'</span><span>'+esc(label(r))+'</span><span class="m">'+esc(r.steps)+' steps · '+esc(r.blockedRequests)+' blocked · '+esc(new Date(r.startedAt).toLocaleString())+'</span></button>').join("");
   document.querySelectorAll(".run").forEach(b => b.onclick = () => { watch(b.dataset.id, cfg); window.scrollTo({top:0, behavior:"smooth"}); });
 }
 
@@ -98,7 +119,7 @@ function setBusy(b){ document.querySelectorAll(".target").forEach(t => t.disable
 (async () => {
   const cfg = await (await fetch("/api/config")).json();
   $("targets").innerHTML = Object.entries(cfg.targets).map(([key,t]) =>
-    '<button class="target" data-key="'+key+'"><b>'+esc(t.label)+'</b><span>'+esc(t.description)+'</span></button>').join("");
+    '<button class="target'+(key === "compromised" ? " red" : "")+'" data-key="'+key+'"><b>'+esc(t.label)+'</b><span>'+esc(t.description)+'</span></button>').join("");
   document.querySelectorAll(".target").forEach(btn => btn.onclick = async () => {
     setBusy(true);
     const res = await fetch("/api/runs", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({target: btn.dataset.key})});

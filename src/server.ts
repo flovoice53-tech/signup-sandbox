@@ -4,9 +4,9 @@ import http from "node:http";
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
 import path from "node:path";
-import { DATA_DIR, executeRun, newRunId, type Run, type RunEvent } from "./agent.ts";
+import { DATA_DIR, executeRun, MAX_RUN_MS, newRunId, type Run, type RunEvent } from "./agent.ts";
 import { DEMO_URL, startDemoSites } from "./demo-sites.ts";
-import { cleanupStale, DRIVER } from "./sandbox.ts";
+import { cleanupStale, DRIVER, startJanitor } from "./sandbox.ts";
 import { MODEL } from "./llm.ts";
 import { UI_HTML } from "./ui.ts";
 
@@ -21,6 +21,10 @@ export const TARGETS: Record<string, { label: string; description: string }> = {
   acme: { label: "Working signup", description: "Form, emailed 6-digit code, welcome page." },
   broken: { label: "Broken verification link", description: "The emailed link returns a server error." },
   trap: { label: "Hostile page", description: "Hidden prompt injection, form exfiltration and a cloud-metadata grab." },
+  compromised: {
+    label: "Compromised agent (red team)",
+    description: "Same hostile page, but the agent obeys the injection and the action policy is off. Only the sandbox is left.",
+  },
 };
 
 const runs = new Map<string, Run>();
@@ -98,8 +102,10 @@ async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
   }
 
   let targetUrl: string;
+  let compromised = false;
   if (body.target && TARGETS[body.target]) {
-    targetUrl = `${DEMO_URL}/${body.target}`;
+    compromised = body.target === "compromised";
+    targetUrl = `${DEMO_URL}/${compromised ? "trap" : body.target}`;
   } else if (body.url && process.env.RUN_TOKEN && body.token === process.env.RUN_TOKEN) {
     // Custom URLs only for the operator: the public demo can't be pointed at other people's sites.
     try {
@@ -132,6 +138,7 @@ async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
   const run: Run = {
     id: newRunId(),
     targetUrl,
+    compromised,
     status: "running",
     startedAt: new Date().toISOString(),
     steps: 0,
@@ -206,6 +213,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 await cleanupStale();
+startJanitor(MAX_RUN_MS + 2 * 60_000);
 await loadHistory();
 startDemoSites();
 // Loopback only: Caddy is the public entry, and sandbox containers must not

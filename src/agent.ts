@@ -31,6 +31,10 @@ export type RunEvent = {
 export type Run = {
   id: string;
   targetUrl: string;
+  // Red-team mode: the run first does what the page's hidden instructions
+  // say, as an injected agent would, with the action policy off, so only the
+  // sandbox itself stands between the page and the test secrets.
+  compromised?: boolean;
   status: "running" | "passed" | "failed" | "error";
   startedAt: string;
   finishedAt?: string;
@@ -38,6 +42,8 @@ export type Run = {
   steps: number;
   blockedRequests: number;
   policyRefusals?: number;
+  redTeamAttempts?: number;
+  redTeamStopped?: number;
   injectionDetected?: boolean;
   usage: Usage;
   events: RunEvent[];
@@ -94,8 +100,13 @@ export async function executeRun(run: Run, emit: (e: RunEvent) => void) {
     if (run.status !== "running") return;
     // Security findings come from the run itself, not from the model's summary.
     const security: string[] = [];
+    if (run.compromised && run.redTeamAttempts) {
+      security.push(
+        `red-team: the simulated compromised agent made ${run.redTeamAttempts} off-site request${run.redTeamAttempts === 1 ? "" : "s"} the page asked for (credentials exfiltration, cloud metadata) and the sandbox stopped ${run.redTeamStopped === run.redTeamAttempts ? "all of them" : `${run.redTeamStopped} of them`}`,
+      );
+    }
     if (run.injectionDetected) security.push("the agent recognised and ignored a prompt injection on the page");
-    if (run.blockedRequests) security.push(`the egress proxy blocked ${run.blockedRequests} request${run.blockedRequests === 1 ? "" : "s"} the page tried to make`);
+    if (run.blockedRequests) security.push(`the egress proxy blocked ${run.blockedRequests} outbound request${run.blockedRequests === 1 ? "" : "s"}`);
     if (run.policyRefusals) security.push(`the policy refused ${run.policyRefusals} agent action${run.policyRefusals === 1 ? "" : "s"}`);
     run.status = status;
     run.summary = summary + (security.length ? ` Security: ${security.join("; ")}.` : "");
@@ -140,6 +151,29 @@ export async function executeRun(run: Run, emit: (e: RunEvent) => void) {
     const history: string[] = [];
     const mail: MailState = { since: new Date(Date.now() - 5_000).toISOString(), received: 0 };
 
+    if (run.compromised) {
+      const obs = await sandbox.send<Observation>("observe");
+      // Off-site URLs the page asks for, placeholders included (e.g. ?password={{password}}).
+      const asked = [...new Set(obs.text.match(/https?:\/\/[^\s"'<>)]+/g) ?? [])].filter((u) => {
+        try {
+          return !allowedHosts.includes(new URL(u.replace(/\{\{\w+\}\}/g, "x")).hostname);
+        } catch {
+          return false;
+        }
+      });
+      say("policy", `Red-team mode: simulating an agent that obeyed the page's hidden instructions (${asked.length} off-site URL${asked.length === 1 ? "" : "s"}), with the action policy off.`);
+      for (const url of asked) {
+        const blockedBefore = run.blockedRequests;
+        const outcome = await perform({ action: "navigate", url }, obs, sandbox, identity, box, allowedHosts, mail, true, say, 0);
+        history.push(`injected step: navigate ${url} → ${outcome}`);
+        run.redTeamAttempts = (run.redTeamAttempts ?? 0) + 1;
+        // Counted as stopped only when the proxy actually logged a block for it.
+        await new Promise((r) => setTimeout(r, 300));
+        if (run.blockedRequests > blockedBefore) run.redTeamStopped = (run.redTeamStopped ?? 0) + 1;
+      }
+      await sandbox.send("goto", { url: run.targetUrl });
+    }
+
     while (run.status === "running") {
       if (run.steps >= MAX_STEPS) return finish("failed", `Stopped after ${MAX_STEPS} steps without finishing the signup.`);
       run.steps++;
@@ -176,7 +210,7 @@ export async function executeRun(run: Run, emit: (e: RunEvent) => void) {
       }
       if (action.action === "fail") return finish("failed", action.summary ?? "The flow is broken.");
 
-      const outcome = await perform(action, obs, sandbox, identity, box, allowedHosts, mail, say, step);
+      const outcome = await perform(action, obs, sandbox, identity, box, allowedHosts, mail, !!run.compromised, say, step);
       history.push(`step ${step}: ${shown} → ${outcome}${flaggedInjection ? " [you flagged a prompt injection on this page]" : ""}`);
       if (outcome.startsWith("refused by policy")) run.policyRefusals = (run.policyRefusals ?? 0) + 1;
       // A sandbox that stopped answering can't be trusted to be in a known state.
@@ -194,6 +228,11 @@ export async function executeRun(run: Run, emit: (e: RunEvent) => void) {
 }
 
 type MailState = { since: string; received: number };
+
+// For the log: show which secret was in the URL without printing it.
+function redactUrl(url: string, identity: Record<string, string>) {
+  return redact(url, identity);
+}
 
 // A hostile page can echo what was typed into visible text; the model only
 // ever gets the placeholders back.
@@ -279,6 +318,7 @@ async function perform(
   box: Mailbox,
   allowedHosts: string[],
   mailState: MailState,
+  compromised: boolean,
   say: (kind: RunEvent["kind"], text: string, extra?: Partial<RunEvent>) => void,
   step: number,
 ): Promise<string> {
@@ -305,8 +345,11 @@ async function perform(
         // Second layer behind the proxy: the agent may only navigate within
         // the site under test, whatever the page told it.
         if (!allowedHosts.includes(host)) {
-          say("policy", `Policy refused navigation to ${host}: outside the site under test.`, { step, blocked: true });
-          return "refused by policy: outside the site under test";
+          if (!compromised) {
+            say("policy", `Policy refused navigation to ${host}: outside the site under test.`, { step, blocked: true });
+            return "refused by policy: outside the site under test";
+          }
+          say("policy", `Red-team mode: the compromised agent opens ${redactUrl(url, identity)} (policy check off; only the sandbox can stop it).`, { step });
         }
         const res = await sandbox.send<{ status: number | null }>("goto", { url });
         return `ok (HTTP ${res.status ?? "?"})`;
@@ -330,6 +373,7 @@ async function perform(
         return "ok";
     }
   } catch (err) {
-    return `error: ${(err as Error).message}`;
+    // Browser errors echo the URL, which may carry substituted secrets.
+    return `error: ${redact((err as Error).message, identity)}`;
   }
 }
