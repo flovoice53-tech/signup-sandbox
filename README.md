@@ -40,6 +40,8 @@ Signup and email verification are the most important flows on most products and 
 4. When the site sends a verification email, the orchestrator reads it outside the sandbox and gives the agent the code or link.
 5. The run ends with a verdict (`passed` / `failed` with the broken step), a step-by-step log with screenshots, and the sandbox is destroyed.
 
+The test inbox comes from [receivemail.dev](https://receivemail.dev/developers), a free disposable-inbox API with an [OpenAPI spec](https://receivemail.dev/openapi.json) and a remote MCP server (`https://receivemail.dev/mcp`, listed in the official MCP registry as `dev.receivemail/receivemail`). Signup Sandbox calls its REST API from the orchestrator. Agents outside this project can use the MCP server to get the same kind of throwaway inbox.
+
 ## Containment
 
 | Layer | What it stops |
