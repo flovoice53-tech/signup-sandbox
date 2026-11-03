@@ -27,7 +27,7 @@ main{max-width:1200px;margin:0 auto;padding:16px 24px 48px}
 #approve button{margin-right:10px;padding:8px 16px;border-radius:8px;border:0;font:inherit;font-weight:600;cursor:pointer}#approve .yes{background:var(--ok);color:#06210f}#approve .no{background:var(--bad);color:#2a0507}
 .ev.approval{border-color:var(--accent);background:#14213d}
 #redteam{display:none;padding:14px 16px;border-radius:10px;margin-bottom:14px;font-weight:700;background:#331416;border:1px solid var(--bad);font-size:17px}
-#verdict.passed{background:#123222;border:1px solid var(--ok)}#verdict.failed{background:#33240f;border:1px solid var(--warn)}#verdict.error{background:#331416;border:1px solid var(--bad)}
+#verdict.passed{background:#123222;border:1px solid var(--ok)}#verdict.stopped{background:#1b2233;border:1px solid var(--muted)}#verdict.failed{background:#33240f;border:1px solid var(--warn)}#verdict.error{background:#331416;border:1px solid var(--bad)}
 .how{color:var(--muted);font-size:13px;margin-top:28px;max-width:860px}.how b{color:var(--text)}
 code{background:#202636;padding:1px 5px;border-radius:4px}
 .contain{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:14px}
@@ -48,12 +48,12 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
 .alert{font-size:12px;color:var(--muted);margin:2px 0 0 4px}
 #recent{margin-top:20px}#recent h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
 .run{display:flex;gap:10px;align-items:center;padding:7px 10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;margin:5px 0;cursor:pointer;font-size:13px;color:inherit;width:100%;text-align:left;font-family:inherit}
-.run:hover{border-color:var(--accent)}.run .st{font-weight:600;min-width:60px}.run .st.passed{color:var(--ok)}.run .st.failed{color:var(--warn)}.run .st.error{color:var(--bad)}.run .st.running{color:var(--accent)}.run .m{color:var(--muted)}
+.run:hover{border-color:var(--accent)}.run .st{font-weight:600;min-width:60px}.run .st.passed{color:var(--ok)}.run .st.failed{color:var(--warn)}.run .st.error{color:var(--bad)}.run .st.stopped{color:var(--muted)}.run .st.running{color:var(--accent)}.run .m{color:var(--muted)}
 </style></head><body>
 <header><h1>Signup Sandbox</h1>
 <p>An AI agent signs up on a website like a new user would, confirms the email with a real inbox, and tells you where the flow breaks. Every browser action runs in a disposable sandbox on Vultr that can only reach the site under test.</p></header>
 <main>
-<button class="judge" id="judge"><b>▶ Watch the containment moment</b><span>One click for judges: the model is told to trust a hostile page that asks it to send the test password to a third party and read the cloud metadata service. If the model refuses, a fully compromised agent is simulated. Watch the sandbox block every attempt live (about 2 minutes).</span></button>
+<button class="judge" id="judge"><b>▶ Watch the containment moment</b><span>One click for judges: the model is told to trust a hostile page that asks it to send the test password to a third party and read the cloud metadata service. If the model refuses, a fully compromised agent is simulated. Watch the sandbox block every attempt live (2–3 minutes).</span></button>
 <div id="replaynote"></div>
 <div class="targets" id="targets"></div>
 <div class="opts"><label><input type="checkbox" id="approvalOpt">Human in the loop: ask me before the agent clicks any button (submit, verify)</label></div>
@@ -82,6 +82,8 @@ function esc(s){return String(s).replace(/[&<>"']/g,c=>"&#"+c.charCodeAt(0)+";")
 let counts = { egress: 0, policy: 0, teardown: false };
 let judge = false;
 const approvalTokens = {};
+// Keeps the approval token across a reload of the page that started the run.
+const tokenFor = (id) => { if (approvalTokens[id]) return approvalTokens[id]; try { return sessionStorage.getItem("approval:" + id) || null; } catch (e) { return null; } };
 
 function renderContainment(run){
   const cards = [
@@ -101,13 +103,13 @@ function renderStats(run, cfg){
   if (run.status !== "running") {
     const v = $("verdict");
     v.className = run.status; v.style.display = "block";
-    v.textContent = (run.status === "passed" ? "✓ Signup works: " : run.status === "failed" ? "✗ Flow broken: " : "Run error: ") + (run.summary || "");
+    v.textContent = (run.status === "passed" ? "✓ Signup works: " : run.status === "failed" ? "✗ Flow broken: " : run.status === "stopped" ? "■ Stopped by a person: " : "Run error: ") + (run.summary || "");
     const ck = $("checks"), c = run.checks;
     if (c) {
       const item = (ok, text) => '<b><span class="' + (ok ? "y" : "n") + '">' + (ok ? "✓" : "✗") + '</span> ' + esc(text) + '</b>';
       ck.innerHTML = "Independent checks: " + item(c.email, "verification email arrived") +
         (c.site === null ? "" : item(c.site, "site confirms the account")) +
-        (c.vision ? item(c.vision.verified, "vision model sees a signed-in page") : "");
+        (c.vision === "unavailable" ? '<b><span class="n">?</span> vision check unavailable (image not processed)</b>' : c.vision ? item(c.vision.verified, "vision model sees a signed-in page") : "");
       ck.style.display = "block";
     } else ck.style.display = "none";
     const rt = $("redteam");
@@ -149,7 +151,7 @@ function watch(id, cfg){
 
 function showApproval(e, runId){
   const box = $("approve");
-  const token = approvalTokens[runId];
+  const token = tokenFor(runId);
   if (!token || !e.text.startsWith("Waiting for human approval")) { box.style.display = "none"; return; }
   box.innerHTML = '<b>' + esc(e.text) + '</b>' + (e.screenshot ? '<img src="/api/runs/' + esc(runId) + '/shots/' + esc(e.screenshot) + '" alt="What the sandboxed browser shows now">' : '') +
     '<button class="yes">Approve</button><button class="no">Reject</button>';
@@ -157,8 +159,9 @@ function showApproval(e, runId){
   box.scrollIntoView({ behavior: "smooth", block: "center" });
   const send = async (approve) => {
     box.querySelectorAll("button").forEach(b => b.disabled = true);
-    await fetch("/api/runs/" + runId + "/approve", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: token, approve: approve }) });
-    box.style.display = "none";
+    const r = await fetch("/api/runs/" + runId + "/approve", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: token, approve: approve }) });
+    if (r.ok) { box.style.display = "none"; return; }
+    box.innerHTML = '<b>' + esc(r.status === 409 ? "Too late: this step already timed out and the run was stopped." : "This approval was not accepted.") + '</b>';
   };
   box.querySelector(".yes").onclick = () => send(true);
   box.querySelector(".no").onclick = () => send(false);
@@ -252,7 +255,7 @@ function setBusy(b){ document.querySelectorAll(".target, .judge").forEach(t => t
     const res = await fetch("/api/runs", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({target: btn.dataset.key, approval: $("approvalOpt").checked})});
     const data = await res.json();
     if (!res.ok) { setBusy(false); $("log").innerHTML = '<div class="ev error">'+esc(data.error)+'</div>'; return; }
-    if (data.approvalToken) approvalTokens[data.id] = data.approvalToken;
+    if (data.approvalToken) { approvalTokens[data.id] = data.approvalToken; try { sessionStorage.setItem("approval:" + data.id, data.approvalToken); } catch (e) {} }
     watch(data.id, cfg);
   });
   loadRecent(cfg);

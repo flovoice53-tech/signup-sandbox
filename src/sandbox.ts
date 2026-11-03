@@ -54,7 +54,7 @@ function lines(child: ChildProcess, onLine: (value: any) => void) {
   });
 }
 
-export function startJanitor(maxAgeMs: number) {
+export function startJanitor(maxAgeMs: number, isActive: (sandboxName: string) => boolean = () => false) {
   if (DRIVER !== "docker") return;
   setInterval(async () => {
     try {
@@ -64,7 +64,7 @@ export function startJanitor(maxAgeMs: number) {
         .split("\n")
         .filter(Boolean)
         .map((line) => line.split(" "))
-        .filter(([, ...created]) => Date.now() - Date.parse(created.slice(0, 3).join(" ")) > maxAgeMs)
+        .filter(([name, ...created]) => !isActive(name.replace(/-(proxy|browser)$/, "")) && Date.now() - Date.parse(created.slice(0, 3).join(" ")) > maxAgeMs)
         .map(([name]) => name);
       if (old.length) await docker("rm", "-f", ...old);
       for (const name of new Set(old.map((n) => n.replace(/-(proxy|browser)$/, "")))) await docker("network", "rm", name).catch(() => {});

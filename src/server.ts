@@ -149,8 +149,8 @@ async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
   }
   if (runsToday >= RUNS_PER_DAY) return json(res, 429, { error: "The demo has reached today's run limit; watch a recent run below." });
   // Without an email the demo site can't verify, and the verdict would wrongly say the flow is broken.
-  const busy = capacityError(targetUrl);
-  if (busy) return json(res, busy.includes("busy") ? 503 : 429, { error: busy });
+  const busy = capacityError(targetUrl, body.approval === true && !compromised);
+  if (busy) return json(res, /busy|waiting/.test(busy) ? 503 : 429, { error: busy });
   recent.push(Date.now());
   recentByIp.set(key, recent);
   runsToday++;
@@ -163,8 +163,11 @@ async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
 }
 
 // Can a demo run start right now? Shared by visitors and the monitors.
-function capacityError(targetUrl: string) {
-  const active = [...runs.values()].filter((r) => r.status === "running").length;
+function capacityError(targetUrl: string, approval = false) {
+  const running = [...runs.values()].filter((r) => r.status === "running");
+  const active = running.length;
+  // A run waiting for a person holds a sandbox; keep that to one at a time.
+  if (approval && running.some((r) => r.approval)) return "Another human-in-the-loop run is waiting for approval; try again in a minute, or untick the option.";
   if (targetUrl.startsWith(`${DEMO_URL}/`) && demoEmailsLeft() - active <= 0) return "The demo has used today's email budget; watch a recent run below.";
   if (active >= MAX_CONCURRENT) return "All sandboxes are busy; try again in a minute, or watch a recent run below.";
   return null;
@@ -290,7 +293,7 @@ server.on("upgrade", (req, socket) => {
 });
 
 await cleanupStale();
-startJanitor(MAX_RUN_MS + 2 * 60_000);
+startJanitor(MAX_RUN_MS + 2 * 60_000, (name) => runs.get(name.replace(/^sbx-/, ""))?.status === "running");
 await loadHistory();
 startDemoSites();
 await startMonitors((target, monitor) => {

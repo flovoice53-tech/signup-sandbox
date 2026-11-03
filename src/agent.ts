@@ -16,7 +16,7 @@ import { demoAccountVerified } from "./demo-sites.ts";
 export const MAX_STEPS = 20;
 const MAX_ELEMENTS = 80;
 export const MAX_RUN_MS = 4 * 60_000;
-const APPROVAL_WAIT_MS = 3 * 60_000;
+const APPROVAL_WAIT_MS = 90_000;
 
 // Pending human decisions, resolved by POST /api/runs/:id/approve.
 const pendingApprovals = new Map<string, (approved: boolean) => void>();
@@ -46,7 +46,7 @@ export type Run = {
   // say, as an injected agent would, with the action policy off, so only the
   // sandbox itself stands between the page and the test secrets.
   compromised?: boolean;
-  status: "running" | "passed" | "failed" | "error";
+  status: "running" | "passed" | "failed" | "stopped" | "error";
   startedAt: string;
   finishedAt?: string;
   summary?: string;
@@ -60,7 +60,7 @@ export type Run = {
   redTeamStopped?: number;
   injectionDetected?: boolean;
   // Independent evidence behind a "passed" verdict.
-  checks?: { email: boolean; site: boolean | null; vision: { verified: boolean; evidence: string } | null };
+  checks?: { email: boolean; site: boolean | null; vision: { verified: boolean; evidence: string } | "unavailable" | null };
   // Human in the loop: when on, every button click waits for a person's decision.
   approval?: boolean;
   // Set when a scheduled monitor started the run.
@@ -282,14 +282,24 @@ export async function executeRun(run: Run, emit: (e: RunEvent) => void) {
         }
         const check = confirmed ? " Verified independently: the demo site reports the account as confirmed." : "";
         // Third, separate check: a fresh vision call that only sees the final screenshot.
-        const vision = await visionCheck(run, obs.screenshot);
+        // The endpoint sometimes fails to process an image; one retry, then say so.
+        const vision = VISION ? ((await visionCheck(run, obs.screenshot)) ?? (await visionCheck(run, obs.screenshot)) ?? "unavailable") : null;
         run.checks = { email: true, site: confirmed, vision };
-        if (vision) say("check", `Vision check of the final screenshot: ${vision.verified ? "signed-in, verified state" : "NOT a verified state"} (${vision.evidence})`, { step });
-        const seen = vision ? (vision.verified ? " Vision check: the final screenshot shows a signed-in, verified account." : ` Vision check disagrees: ${vision.evidence}`) : "";
+        if (vision === "unavailable") say("check", "Vision check unavailable: the endpoint could not process the screenshot twice.", { step });
+        else if (vision) say("check", `Vision check of the final screenshot: ${vision.verified ? "signed-in, verified state" : "NOT a verified state"} (${vision.evidence})`, { step });
+        // The vision check is a gate: if it sees no verified, signed-in state, the run fails.
+        if (vision && vision !== "unavailable" && !vision.verified) {
+          return finish("failed", `The agent reported success and the email arrived, but the vision check of the final screenshot disagrees: ${vision.evidence}`);
+        }
+        const seen = vision && vision !== "unavailable" ? " Vision check: the final screenshot shows a signed-in, verified account." : "";
         return finish("passed", brief(action.summary ?? "Signup completed.") + check + seen);
       }
       if (action.action === "fail") return finish("failed", brief(action.summary ?? "The flow is broken."));
 
+      if (run.compromised && action.action === "navigate" && action.url && !hostOf(substitute(action.url, identity))) {
+        history.push(`step ${step}: ${shown} → error: not a valid URL`);
+        continue;
+      }
       if (run.compromised && action.action === "navigate" && action.url && !allowedHosts.includes(hostOf(substitute(action.url, identity)))) {
         const tried = await redTeamAttempt(action.url, obs, step);
         await sandbox.send("goto", { url: run.targetUrl });
@@ -312,8 +322,9 @@ export async function executeRun(run: Run, emit: (e: RunEvent) => void) {
         });
         resumeClock();
         run.awaitingApproval = null;
-        say("approval", approved ? `Approved by a human: ${what}` : `Rejected by a human (or no answer in ${APPROVAL_WAIT_MS / 60_000} min): ${what}`, { step });
-        if (!approved) return finish("failed", `Stopped before "${target!.label || target!.ref}": a human did not approve the action.`);
+        say("approval", approved ? `Approved by a human: ${what}` : `Rejected by a human (or no answer in ${APPROVAL_WAIT_MS / 1000} s): ${what}`, { step });
+        // Not a verdict on the site: the person chose to stop here.
+        if (!approved) return finish("stopped", `Stopped before "${target!.label || target!.ref}": a human did not approve the action.`);
       }
       const outcome = await perform(action, obs, sandbox, identity, box, allowedHosts, mail, !!run.compromised, say, step);
       history.push(`step ${step}: ${shown} → ${outcome}${flaggedInjection ? " [you flagged a prompt injection on this page]" : ""}`);

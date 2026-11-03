@@ -71,7 +71,7 @@ async function tick(m: MonitorState, launch: Launch) {
   await started.done;
   const run = started.run;
   // A run that errored (model or sandbox trouble) says nothing about the site.
-  if (run.status === "error" || run.status === "running") return void (await save());
+  if (run.status === "error" || run.status === "stopped" || run.status === "running") return void (await save());
   const result: MonitorResult = { at: run.finishedAt ?? new Date().toISOString(), status: run.status, runId: run.id };
   const prev = m.last;
   m.last = result;
