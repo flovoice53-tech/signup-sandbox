@@ -22,6 +22,7 @@ main{max-width:1200px;margin:0 auto;padding:16px 24px 48px}
 .ev.result{border-color:var(--ok)}.ev.error{border-color:var(--warn)}.ev.teardown{border-color:var(--muted)}
 #shot{width:100%;border-radius:6px;border:1px solid var(--line);display:none}
 #verdict{display:none;padding:14px 16px;border-radius:10px;margin-bottom:14px;font-weight:600}
+#redteam{display:none;padding:14px 16px;border-radius:10px;margin-bottom:14px;font-weight:700;background:#331416;border:1px solid var(--bad);font-size:17px}
 #verdict.passed{background:#123222;border:1px solid var(--ok)}#verdict.failed{background:#33240f;border:1px solid var(--warn)}#verdict.error{background:#331416;border:1px solid var(--bad)}
 .how{color:var(--muted);font-size:13px;margin-top:28px;max-width:860px}.how b{color:var(--text)}
 code{background:#202636;padding:1px 5px;border-radius:4px}
@@ -37,6 +38,7 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
 <p>An AI agent signs up on a website like a new user would, confirms the email with a real inbox, and tells you where the flow breaks. Every browser action runs in a disposable sandbox on Vultr that can only reach the site under test.</p></header>
 <main>
 <div class="targets" id="targets"></div>
+<div id="redteam"></div>
 <div id="verdict"></div>
 <div class="stats" id="stats"></div>
 <div class="contain" id="contain"></div>
@@ -45,8 +47,8 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
   <div class="panel"><h2>What the sandboxed browser sees</h2><img id="shot" alt="Sandbox browser screenshot"></div>
 </div>
 <div id="recent"></div>
-<div class="how"><p><b>Containment.</b> Each run gets its own isolated Docker network. The browser container has no capabilities, a read-only filesystem, memory/CPU/process limits and no secrets; its only way out is an egress proxy that allows the site under test and refuses private addresses, including the cloud metadata service. The model's actions are checked against the same policy before they run. When the run ends, the browser, the proxy and the network are deleted.</p>
-<p><b>Secrets stay outside.</b> The test inbox (receivemail.dev) is read by the orchestrator, not the browser, and the model only ever sees placeholders such as <code>{{password}}</code>.</p></div>
+<div class="how"><p><b>Containment.</b> Each run gets its own isolated Docker network. The browser container has no capabilities, a read-only filesystem, memory/CPU/process limits and no long-lived secrets (the LLM key and inbox secret stay outside); its only way out is an egress proxy that allows the site under test and refuses private addresses, including the cloud metadata service. The model's actions are checked against the same policy before they run. When the run ends, the browser, the proxy and the network are deleted.</p>
+<p><b>Secrets stay outside.</b> The test inbox (receivemail.dev) is read by the orchestrator, not the browser. The only credential the browser ever holds is a throwaway per-run test password, which it needs to type; the model only ever sees placeholders such as <code>{{password}}</code>.</p></div>
 </main>
 <script>
 const $ = (id) => document.getElementById(id);
@@ -59,7 +61,7 @@ let counts = { egress: 0, policy: 0, teardown: false };
 function renderContainment(run){
   const cards = [
     [run.blockedRequests, "requests blocked by the egress proxy", run.blockedRequests ? "bad" : ""],
-    [counts.policy, run.compromised ? "escape attempts by the agent itself" : "agent actions refused by policy", counts.policy ? "warn" : ""],
+    [counts.policy, run.compromised ? "simulated escape attempts (compromised agent)" : "agent actions refused by policy", counts.policy ? "warn" : ""],
     [run.injectionDetected ? "yes" : "no", "prompt injection noticed by the agent", run.injectionDetected ? "warn" : ""],
     [counts.teardown ? "✓" : (run.status === "running" ? "…" : "–"), "sandbox destroyed after the run", counts.teardown ? "ok" : ""],
   ];
@@ -75,6 +77,11 @@ function renderStats(run, cfg){
     const v = $("verdict");
     v.className = run.status; v.style.display = "block";
     v.textContent = (run.status === "passed" ? "✓ Signup works: " : run.status === "failed" ? "✗ Flow broken: " : "Run error: ") + (run.summary || "");
+    const rt = $("redteam");
+    if (run.compromised && run.redTeamAttempts) {
+      rt.style.display = "block";
+      rt.textContent = "Containment: " + (run.redTeamStopped || 0) + " of " + run.redTeamAttempts + " escape attempts blocked by the sandbox (credential exfiltration, cloud metadata). " + run.blockedRequests + " outbound requests refused in total.";
+    }
   }
 }
 
@@ -92,7 +99,7 @@ function addEvent(e, runId){
 
 function watch(id, cfg){
   if (source) source.close();
-  $("log").innerHTML = ""; $("verdict").style.display = "none"; $("shot").style.display = "none";
+  $("log").innerHTML = ""; $("verdict").style.display = "none"; $("redteam").style.display = "none"; $("shot").style.display = "none";
   history.replaceState(null, "", "?run=" + id);
   source = new EventSource("/api/runs/" + id + "/events");
   // The server replays the whole run on every (re)connect, so start clean.

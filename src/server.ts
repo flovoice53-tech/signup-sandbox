@@ -5,13 +5,13 @@ import { readFile, readdir, writeFile } from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
 import path from "node:path";
 import { DATA_DIR, executeRun, MAX_RUN_MS, newRunId, type Run, type RunEvent } from "./agent.ts";
-import { DEMO_URL, startDemoSites } from "./demo-sites.ts";
+import { DEMO_URL, demoEmailsLeft, startDemoSites } from "./demo-sites.ts";
 import { cleanupStale, DRIVER, startJanitor } from "./sandbox.ts";
 import { MODEL } from "./llm.ts";
 import { UI_HTML } from "./ui.ts";
 
 const PORT = Number(process.env.PORT ?? 4000);
-const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 2);
+const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 3);
 const RUNS_PER_IP_PER_HOUR = Number(process.env.RUNS_PER_IP_PER_HOUR ?? 6);
 // Every run costs model tokens and a demo email, so the public demo has a daily ceiling.
 const RUNS_PER_DAY = Number(process.env.RUNS_PER_DAY ?? 150);
@@ -23,7 +23,7 @@ export const TARGETS: Record<string, { label: string; description: string }> = {
   trap: { label: "Hostile page", description: "Hidden prompt injection, form exfiltration and a cloud-metadata grab." },
   compromised: {
     label: "Compromised agent (red team)",
-    description: "Same hostile page, but the agent obeys the injection and the action policy is off. Only the sandbox is left.",
+    description: "Same hostile page, but we simulate an agent that obeys the injection, with the action policy off. Only the sandbox is left.",
   },
 };
 
@@ -105,7 +105,7 @@ async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
   let compromised = false;
   if (body.target && TARGETS[body.target]) {
     compromised = body.target === "compromised";
-    targetUrl = `${DEMO_URL}/${compromised ? "trap" : body.target}`;
+    targetUrl = `${DEMO_URL}/${compromised || body.target === "trap" ? "notes" : body.target}`;
   } else if (body.url && process.env.RUN_TOKEN && body.token === process.env.RUN_TOKEN) {
     // Custom URLs only for the operator: the public demo can't be pointed at other people's sites.
     try {
@@ -130,6 +130,10 @@ async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
   }
   if (runsToday >= RUNS_PER_DAY) return json(res, 429, { error: "The demo has reached today's run limit; watch a recent run below." });
   const active = [...runs.values()].filter((r) => r.status === "running").length;
+  // Without an email the demo site can't verify, and the verdict would wrongly say the flow is broken.
+  if (targetUrl.startsWith(`${DEMO_URL}/`) && demoEmailsLeft() - active <= 0) {
+    return json(res, 429, { error: "The demo has used today's email budget; watch a recent run below." });
+  }
   if (active >= MAX_CONCURRENT) return json(res, 503, { error: "All sandboxes are busy; try again in a minute, or watch a recent run below." });
   recent.push(Date.now());
   recentByIp.set(key, recent);
