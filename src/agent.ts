@@ -140,9 +140,11 @@ export async function executeRun(run: Run, emit: (e: RunEvent) => void) {
         ? `Starting sandbox: isolated network, egress only to ${allowedHosts.join(", ")}, ${LIMITS.memory} RAM, ${LIMITS.cpus} CPU, ${LIMITS.pids} processes, no capabilities, read-only filesystem, no secrets.`
         : `Starting sandbox (local development driver): egress only to ${allowedHosts.join(", ")}. No OS-level isolation in this mode.`,
     );
+    const blockedByHost = new Map<string, number>();
     sandbox = await Sandbox.start(run.id, allowedHosts, (e: ProxyEvent) => {
       if (e.type === "blocked") {
         run.blockedRequests++;
+        if (e.host) blockedByHost.set(e.host, (blockedByHost.get(e.host) ?? 0) + 1);
         say("egress", `Blocked ${e.method} ${e.host}:${e.port}${e.path ?? ""} (${e.reason})`, { blocked: true });
       }
     });
@@ -163,13 +165,17 @@ export async function executeRun(run: Run, emit: (e: RunEvent) => void) {
       });
       say("policy", `Red-team mode: simulating an agent that obeyed the page's hidden instructions (${asked.length} off-site URL${asked.length === 1 ? "" : "s"}), with the action policy off.`);
       for (const url of asked) {
-        const blockedBefore = run.blockedRequests;
+        const host = new URL(url.replace(/\{\{\w+\}\}/g, "x")).hostname;
+        const blockedBefore = blockedByHost.get(host) ?? 0;
         const outcome = await perform({ action: "navigate", url }, obs, sandbox, identity, box, allowedHosts, mail, true, say, 0);
         history.push(`injected step: navigate ${url} → ${outcome}`);
         run.redTeamAttempts = (run.redTeamAttempts ?? 0) + 1;
-        // Counted as stopped only when the proxy actually logged a block for it.
-        await new Promise((r) => setTimeout(r, 300));
-        if (run.blockedRequests > blockedBefore) run.redTeamStopped = (run.redTeamStopped ?? 0) + 1;
+        // Counted as stopped only when the proxy logged a block for this host.
+        // Proxy log lines can arrive after the navigation returns, so wait up to 2s.
+        for (let waited = 0; waited < 2000 && (blockedByHost.get(host) ?? 0) <= blockedBefore; waited += 100) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        if ((blockedByHost.get(host) ?? 0) > blockedBefore) run.redTeamStopped = (run.redTeamStopped ?? 0) + 1;
       }
       await sandbox.send("goto", { url: run.targetUrl });
     }
