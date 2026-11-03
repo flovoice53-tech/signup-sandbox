@@ -98,6 +98,16 @@ async function sendMail(to: string, subject: string, body: string) {
   await transport.sendMail({ from: FROM, to, subject, text: body });
 }
 
+// Monitor alerts go out through the same transport and daily budget.
+export async function sendAlertMail(to: string, subject: string, body: string) {
+  const address = FROM.match(/<([^>]+)>/)?.[1] ?? FROM;
+  if (INBOX_MODE === "local") return deliverLocal(to, { from: `Signup Sandbox monitor <${address}>`, subject, body });
+  if (!transport) throw new Error("SMTP_URL is not set");
+  if (demoEmailsLeft() <= 0) throw new Error("daily demo email limit reached");
+  emailsToday++;
+  await transport.sendMail({ from: `Signup Sandbox monitor <${address}>`, to, subject, text: body });
+}
+
 // Ground truth for the agent's verdict: null when the address never signed
 // up here (another site is under test), otherwise whether it was verified.
 export function demoAccountVerified(email: string): boolean | null {

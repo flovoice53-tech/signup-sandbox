@@ -10,6 +10,7 @@ import { DEMO_URL, demoEmailsLeft, startDemoSites } from "./demo-sites.ts";
 import { cleanupStale, DRIVER, startJanitor } from "./sandbox.ts";
 import { MODEL } from "./llm.ts";
 import { UI_HTML } from "./ui.ts";
+import { listMonitors, startMonitors } from "./monitors.ts";
 
 const PORT = Number(process.env.PORT ?? 4000);
 const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? 3);
@@ -147,40 +148,51 @@ async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
     runsToday = 0;
   }
   if (runsToday >= RUNS_PER_DAY) return json(res, 429, { error: "The demo has reached today's run limit; watch a recent run below." });
-  const active = [...runs.values()].filter((r) => r.status === "running").length;
   // Without an email the demo site can't verify, and the verdict would wrongly say the flow is broken.
-  if (targetUrl.startsWith(`${DEMO_URL}/`) && demoEmailsLeft() - active <= 0) {
-    return json(res, 429, { error: "The demo has used today's email budget; watch a recent run below." });
-  }
-  if (active >= MAX_CONCURRENT) return json(res, 503, { error: "All sandboxes are busy; try again in a minute, or watch a recent run below." });
+  const busy = capacityError(targetUrl);
+  if (busy) return json(res, busy.includes("busy") ? 503 : 429, { error: busy });
   recent.push(Date.now());
   recentByIp.set(key, recent);
   runsToday++;
 
+  const { run } = launch(targetUrl, { compromised, approval: body.approval === true && !compromised });
+  // Only whoever started the run can approve its actions.
+  const approvalToken = run.approval ? randomBytes(16).toString("hex") : undefined;
+  if (approvalToken) approvalTokens.set(run.id, approvalToken);
+  json(res, 201, { id: run.id, approvalToken });
+}
+
+// Can a demo run start right now? Shared by visitors and the monitors.
+function capacityError(targetUrl: string) {
+  const active = [...runs.values()].filter((r) => r.status === "running").length;
+  if (targetUrl.startsWith(`${DEMO_URL}/`) && demoEmailsLeft() - active <= 0) return "The demo has used today's email budget; watch a recent run below.";
+  if (active >= MAX_CONCURRENT) return "All sandboxes are busy; try again in a minute, or watch a recent run below.";
+  return null;
+}
+
+function launch(targetUrl: string, opts: { compromised?: boolean; approval?: boolean; monitor?: string }) {
   const run: Run = {
     id: newRunId(),
     targetUrl,
-    compromised,
+    compromised: !!opts.compromised,
     status: "running",
     startedAt: new Date().toISOString(),
     steps: 0,
     blockedRequests: 0,
     usage: { promptTokens: 0, completionTokens: 0 },
     events: [],
-    approval: body.approval === true && !compromised,
+    approval: !!opts.approval,
+    monitor: opts.monitor,
   };
   runs.set(run.id, run);
-  // Only whoever started the run can approve its actions.
-  const approvalToken = run.approval ? randomBytes(16).toString("hex") : undefined;
-  if (approvalToken) approvalTokens.set(run.id, approvalToken);
-  executeRun(run, emitFor(run)).finally(async () => {
+  const done = executeRun(run, emitFor(run)).finally(async () => {
     approvalTokens.delete(run.id);
     await writeFile(path.join(DATA_DIR, run.id, "run.json"), JSON.stringify(run)).catch(() => {});
     // Sent after teardown, so viewers see "Sandbox destroyed" before the stream closes.
     for (const l of listeners.get(run.id) ?? []) l.end(`data: ${JSON.stringify({ run: summary(run), end: true })}\n\n`);
     listeners.delete(run.id);
   });
-  json(res, 201, { id: run.id, approvalToken });
+  return { run, done };
 }
 
 function streamEvents(run: Run, req: http.IncomingMessage, res: http.ServerResponse) {
@@ -214,6 +226,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "GET" && parts[0] === "api" && parts[1] === "canary" && parts[2]) {
       return json(res, 200, { hits: canaryHits.get(parts[2]) ?? 0 });
+    }
+    if (req.method === "GET" && url.pathname === "/api/monitors") {
+      return json(res, 200, listMonitors().map(({ alerts, ...m }) => ({ ...m, alerts: alerts.map(({ at, channels, text }) => ({ at, channels, text })) })));
     }
     if (req.method === "GET" && url.pathname === "/api/bench") {
       try {
@@ -278,6 +293,11 @@ await cleanupStale();
 startJanitor(MAX_RUN_MS + 2 * 60_000);
 await loadHistory();
 startDemoSites();
+await startMonitors((target, monitor) => {
+  const targetUrl = `${DEMO_URL}/${target === "trap" ? "notes" : target}`;
+  const busy = capacityError(targetUrl);
+  return busy ? { error: busy } : launch(targetUrl, { monitor });
+}, Object.keys(TARGETS).filter((t) => t !== "compromised"));
 // Loopback only: Caddy is the public entry, and sandbox containers must not
 // be able to reach these ports directly.
 server.listen(PORT, process.env.HOST ?? "127.0.0.1", () => console.log(`signup-sandbox on http://localhost:${PORT} (driver: ${DRIVER}, model: ${MODEL || "unset"})`));

@@ -63,6 +63,8 @@ export type Run = {
   checks?: { email: boolean; site: boolean | null; vision: { verified: boolean; evidence: string } | null };
   // Human in the loop: when on, every button click waits for a person's decision.
   approval?: boolean;
+  // Set when a scheduled monitor started the run.
+  monitor?: string;
   awaitingApproval?: { step: number; action: string; screenshot?: string } | null;
   usage: Usage;
   events: RunEvent[];

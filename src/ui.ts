@@ -41,6 +41,11 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
 .ev.hl{animation:pulse 1.2s ease-in-out 3;border-left-width:6px}#redteam.hl{animation:pulse 1.2s ease-in-out 4}
 .target.red{border-color:#5a2026}.target.red b{color:#ff8a8a}
 #bench{margin-top:24px}#bench h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}#bench .sum{font-size:16px;font-weight:700;margin-bottom:8px}#bench table{width:100%;border-collapse:collapse;font-size:13px}#bench td,#bench th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}#bench th{color:var(--muted);font-weight:600}#bench .ok{color:var(--ok);font-weight:700}#bench .bad{color:var(--bad);font-weight:700}#bench .m{color:var(--muted);font-size:12px;margin-top:6px}
+#monitors{margin-top:24px}#monitors h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
+.mon{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:10px 12px;background:var(--panel);border:1px solid var(--line);border-radius:8px;margin:6px 0;font-size:13px}
+.mon .nm{font-weight:700;min-width:180px}.mon .st{font-weight:700}.mon .st.passed{color:var(--ok)}.mon .st.failed{color:var(--bad)}.mon .m{color:var(--muted)}
+.dots{display:flex;gap:3px}.dots i{display:block;width:9px;height:18px;border-radius:2px;background:var(--line)}.dots i.passed{background:var(--ok)}.dots i.failed{background:var(--bad)}
+.alert{font-size:12px;color:var(--muted);margin:2px 0 0 4px}
 #recent{margin-top:20px}#recent h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
 .run{display:flex;gap:10px;align-items:center;padding:7px 10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;margin:5px 0;cursor:pointer;font-size:13px;color:inherit;width:100%;text-align:left;font-family:inherit}
 .run:hover{border-color:var(--accent)}.run .st{font-weight:600;min-width:60px}.run .st.passed{color:var(--ok)}.run .st.failed{color:var(--warn)}.run .st.error{color:var(--bad)}.run .st.running{color:var(--accent)}.run .m{color:var(--muted)}
@@ -62,6 +67,7 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
   <div class="panel"><h2>What the agent does</h2><div id="log"><div class="ev"><span class="k">ready</span>Pick a flow above to start a run.</div></div></div>
   <div class="panel"><h2>What the sandboxed browser sees</h2><img id="shot" alt="Sandbox browser screenshot"></div>
 </div>
+<div id="monitors"></div>
 <div id="recent"></div>
 <div id="bench"></div>
 <div class="how"><p><b>Containment.</b> Each run gets its own isolated Docker network. The browser container has no capabilities, a read-only filesystem, memory/CPU/process limits and no long-lived secrets (the LLM key and inbox secret stay outside); its only way out is an egress proxy that allows the site under test and refuses private addresses, including the cloud metadata service. The model's actions are checked against the same policy before they run. When the run ends, the browser, the proxy and the network are deleted.</p>
@@ -201,6 +207,21 @@ async function loadRecent(cfg){
   document.querySelectorAll(".run").forEach(b => b.onclick = () => { watch(b.dataset.id, cfg); window.scrollTo({top:0, behavior:"smooth"}); });
 }
 
+async function loadMonitors(cfg){
+  const res = await fetch("/api/monitors");
+  if (!res.ok) return;
+  const list = await res.json();
+  if (!list.length) return;
+  const name = (m) => (cfg.targets[m.target] && cfg.targets[m.target].label) || m.target;
+  $("monitors").innerHTML = '<h2>Scheduled monitors · alert only when a verdict changes</h2>' + list.map(m =>
+    '<div class="mon"><span class="nm">' + esc(name(m)) + '</span>' +
+    '<span class="st ' + esc(m.last ? m.last.status : "") + '">' + esc(m.last ? (m.last.status === "passed" ? "works" : "broken") : "waiting for first run") + '</span>' +
+    '<span class="dots">' + m.history.slice(0, 24).reverse().map(h => '<i class="' + esc(h.status) + '" title="' + esc(new Date(h.at).toLocaleString() + ": " + h.status) + '"></i>').join("") + '</span>' +
+    '<span class="m">every ' + esc(m.everyMinutes) + ' min' + (m.nextAt ? ' · next ' + esc(new Date(m.nextAt).toLocaleTimeString()) : '') + '</span></div>' +
+    m.alerts.slice(0, 2).map(a => '<div class="alert">⚑ ' + esc(new Date(a.at).toLocaleString()) + ' · ' + esc(a.text.split(". ")[0]) + (a.channels.length ? ' · sent by ' + esc(a.channels.join(" + ")) : '') + '</div>').join("")
+  ).join("");
+}
+
 async function loadBench(){
   const res = await fetch("/api/bench");
   if (!res.ok) return;
@@ -236,6 +257,7 @@ function setBusy(b){ document.querySelectorAll(".target, .judge").forEach(t => t
   });
   loadRecent(cfg);
   loadBench();
+  loadMonitors(cfg);
   const existing = new URLSearchParams(location.search).get("run");
   if (existing) watch(existing, cfg);
 })();
