@@ -22,6 +22,10 @@ main{max-width:1200px;margin:0 auto;padding:16px 24px 48px}
 .ev.check{border-color:#2fd2c8}.ev.result{border-color:var(--ok)}.ev.error{border-color:var(--warn)}.ev.teardown{border-color:var(--muted)}
 #shot{width:100%;border-radius:6px;border:1px solid var(--line);display:none}
 #verdict{display:none;padding:14px 16px;border-radius:10px;margin-bottom:14px;font-weight:600}
+.opts{font-size:13px;color:var(--muted);margin:-8px 0 16px}.opts input{vertical-align:middle;margin-right:6px}
+#approve{display:none;padding:14px 16px;border-radius:10px;margin-bottom:14px;background:#14213d;border:1px solid var(--accent)}#approve b{display:block;margin-bottom:8px}#approve img{max-width:420px;width:100%;border-radius:6px;border:1px solid var(--line);display:block;margin:8px 0}
+#approve button{margin-right:10px;padding:8px 16px;border-radius:8px;border:0;font:inherit;font-weight:600;cursor:pointer}#approve .yes{background:var(--ok);color:#06210f}#approve .no{background:var(--bad);color:#2a0507}
+.ev.approval{border-color:var(--accent);background:#14213d}
 #redteam{display:none;padding:14px 16px;border-radius:10px;margin-bottom:14px;font-weight:700;background:#331416;border:1px solid var(--bad);font-size:17px}
 #verdict.passed{background:#123222;border:1px solid var(--ok)}#verdict.failed{background:#33240f;border:1px solid var(--warn)}#verdict.error{background:#331416;border:1px solid var(--bad)}
 .how{color:var(--muted);font-size:13px;margin-top:28px;max-width:860px}.how b{color:var(--text)}
@@ -47,6 +51,8 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
 <button class="judge" id="judge"><b>▶ Watch the containment moment</b><span>One click for judges: the model is told to trust a hostile page that asks it to send the test password to a third party and read the cloud metadata service. If the model refuses, a fully compromised agent is simulated. Watch the sandbox block every attempt live (about 2 minutes).</span></button>
 <div id="replaynote"></div>
 <div class="targets" id="targets"></div>
+<div class="opts"><label><input type="checkbox" id="approvalOpt">Human in the loop: ask me before the agent clicks any button (submit, verify)</label></div>
+<div id="approve"></div>
 <div id="redteam"></div>
 <div id="verdict"></div>
 <div id="checks"></div>
@@ -69,6 +75,7 @@ function esc(s){return String(s).replace(/[&<>"']/g,c=>"&#"+c.charCodeAt(0)+";")
 
 let counts = { egress: 0, policy: 0, teardown: false };
 let judge = false;
+const approvalTokens = {};
 
 function renderContainment(run){
   const cards = [
@@ -115,12 +122,13 @@ function addEvent(e, runId){
   div.innerHTML = '<span class="k">' + esc(e.step ? "step " + e.step + " · " + e.kind : e.kind) + '</span>' + esc(e.text);
   $("log").appendChild(div);
   $("log").scrollTop = $("log").scrollHeight;
+  if (e.kind === "approval") showApproval(e, runId);
   if (e.screenshot) { $("shot").src = "/api/runs/" + runId + "/shots/" + e.screenshot; $("shot").style.display = "block"; }
 }
 
 function watch(id, cfg){
   if (source) source.close();
-  $("log").innerHTML = ""; $("verdict").style.display = "none"; $("checks").style.display = "none"; $("redteam").style.display = "none"; $("shot").style.display = "none"; $("replaynote").style.display = "none";
+  $("log").innerHTML = ""; $("verdict").style.display = "none"; $("checks").style.display = "none"; $("redteam").style.display = "none"; $("shot").style.display = "none"; $("replaynote").style.display = "none"; $("approve").style.display = "none";
   history.replaceState(null, "", "?run=" + id);
   source = new EventSource("/api/runs/" + id + "/events");
   // The server replays the whole run on every (re)connect, so start clean.
@@ -131,6 +139,23 @@ function watch(id, cfg){
     renderStats(data.run, cfg);
     if (data.end) { source.close(); setBusy(false); loadRecent(cfg); if (judge) spotlight(); }
   };
+}
+
+function showApproval(e, runId){
+  const box = $("approve");
+  const token = approvalTokens[runId];
+  if (!token || !e.text.startsWith("Waiting for human approval")) { box.style.display = "none"; return; }
+  box.innerHTML = '<b>' + esc(e.text) + '</b>' + (e.screenshot ? '<img src="/api/runs/' + esc(runId) + '/shots/' + esc(e.screenshot) + '" alt="What the sandboxed browser shows now">' : '') +
+    '<button class="yes">Approve</button><button class="no">Reject</button>';
+  box.style.display = "block";
+  box.scrollIntoView({ behavior: "smooth", block: "center" });
+  const send = async (approve) => {
+    box.querySelectorAll("button").forEach(b => b.disabled = true);
+    await fetch("/api/runs/" + runId + "/approve", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ token: token, approve: approve }) });
+    box.style.display = "none";
+  };
+  box.querySelector(".yes").onclick = () => send(true);
+  box.querySelector(".no").onclick = () => send(false);
 }
 
 function spotlight(){
@@ -203,9 +228,10 @@ function setBusy(b){ document.querySelectorAll(".target, .judge").forEach(t => t
   };
   document.querySelectorAll(".target").forEach(btn => btn.onclick = async () => {
     setBusy(true); judge = false;
-    const res = await fetch("/api/runs", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({target: btn.dataset.key})});
+    const res = await fetch("/api/runs", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({target: btn.dataset.key, approval: $("approvalOpt").checked})});
     const data = await res.json();
     if (!res.ok) { setBusy(false); $("log").innerHTML = '<div class="ev error">'+esc(data.error)+'</div>'; return; }
+    if (data.approvalToken) approvalTokens[data.id] = data.approvalToken;
     watch(data.id, cfg);
   });
   loadRecent(cfg);

@@ -16,12 +16,23 @@ import { demoAccountVerified } from "./demo-sites.ts";
 export const MAX_STEPS = 20;
 const MAX_ELEMENTS = 80;
 export const MAX_RUN_MS = 4 * 60_000;
+const APPROVAL_WAIT_MS = 3 * 60_000;
+
+// Pending human decisions, resolved by POST /api/runs/:id/approve.
+const pendingApprovals = new Map<string, (approved: boolean) => void>();
+export function decideApproval(runId: string, approved: boolean) {
+  const resolve = pendingApprovals.get(runId);
+  if (!resolve) return false;
+  pendingApprovals.delete(runId);
+  resolve(approved);
+  return true;
+}
 const EMAIL_WAIT_MS = 90_000;
 export const DATA_DIR = path.resolve(process.env.DATA_DIR ?? "data");
 
 export type RunEvent = {
   at: string;
-  kind: "info" | "observe" | "action" | "email" | "check" | "egress" | "policy" | "result" | "error" | "teardown";
+  kind: "info" | "observe" | "action" | "email" | "check" | "approval" | "egress" | "policy" | "result" | "error" | "teardown";
   text: string;
   step?: number;
   screenshot?: string;
@@ -50,6 +61,9 @@ export type Run = {
   injectionDetected?: boolean;
   // Independent evidence behind a "passed" verdict.
   checks?: { email: boolean; site: boolean | null; vision: { verified: boolean; evidence: string } | null };
+  // Human in the loop: when on, every button click waits for a person's decision.
+  approval?: boolean;
+  awaitingApproval?: { step: number; action: string; screenshot?: string } | null;
   usage: Usage;
   events: RunEvent[];
 };
@@ -133,10 +147,23 @@ export async function executeRun(run: Run, emit: (e: RunEvent) => void) {
   let timedOut = false;
   // Hard wall-clock limit: stopping the sandbox makes any pending step fail
   // at once, however long the model or the inbox would have taken.
-  const deadline = setTimeout(() => {
+  // The clock stops while a human is deciding, so a slow approval doesn't eat the run's time.
+  let remaining = MAX_RUN_MS;
+  let clockStarted = Date.now();
+  const onTimeout = () => {
     timedOut = true;
     sandbox?.stop();
-  }, MAX_RUN_MS);
+  };
+  let deadline = setTimeout(onTimeout, remaining);
+  const pauseClock = () => {
+    clearTimeout(deadline);
+    if (pendingApprovals.has(run.id)) decideApproval(run.id, false);
+    remaining -= Date.now() - clockStarted;
+  };
+  const resumeClock = () => {
+    clockStarted = Date.now();
+    deadline = setTimeout(onTimeout, Math.max(remaining, 1000));
+  };
   try {
     const dir = path.join(DATA_DIR, run.id);
     await mkdir(dir, { recursive: true });
@@ -266,6 +293,25 @@ export async function executeRun(run: Run, emit: (e: RunEvent) => void) {
         await sandbox.send("goto", { url: run.targetUrl });
         history.push(`step ${step}: ${shown} → ${tried}; the sandbox blocked it and you are back on the signup page`);
         continue;
+      }
+      const target = action.ref ? obs.elements.find((e) => e.ref === action.ref) : undefined;
+      const isButton = !!target && (target.tag === "button" || (target.tag === "input" && ["submit", "button"].includes(target.type ?? "")));
+      if (run.approval && action.action === "click" && isButton) {
+        const what = `click "${target!.label || target!.ref}" on ${obs.title || obs.url}`;
+        run.awaitingApproval = { step, action: what, screenshot: `step-${step}.jpg` };
+        say("approval", `Waiting for human approval: ${what}`, { step, screenshot: `step-${step}.jpg` });
+        pauseClock();
+        const approved = await new Promise<boolean>((resolve) => {
+          const timer = setTimeout(() => decideApproval(run.id, false), APPROVAL_WAIT_MS);
+          pendingApprovals.set(run.id, (ok) => {
+            clearTimeout(timer);
+            resolve(ok);
+          });
+        });
+        resumeClock();
+        run.awaitingApproval = null;
+        say("approval", approved ? `Approved by a human: ${what}` : `Rejected by a human (or no answer in ${APPROVAL_WAIT_MS / 60_000} min): ${what}`, { step });
+        if (!approved) return finish("failed", `Stopped before "${target!.label || target!.ref}": a human did not approve the action.`);
       }
       const outcome = await perform(action, obs, sandbox, identity, box, allowedHosts, mail, !!run.compromised, say, step);
       history.push(`step ${step}: ${shown} → ${outcome}${flaggedInjection ? " [you flagged a prompt injection on this page]" : ""}`);

@@ -4,7 +4,8 @@ import http from "node:http";
 import { readFile, readdir, writeFile } from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
 import path from "node:path";
-import { DATA_DIR, executeRun, MAX_RUN_MS, newRunId, type Run, type RunEvent } from "./agent.ts";
+import { DATA_DIR, decideApproval, executeRun, MAX_RUN_MS, newRunId, type Run, type RunEvent } from "./agent.ts";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { DEMO_URL, demoEmailsLeft, startDemoSites } from "./demo-sites.ts";
 import { cleanupStale, DRIVER, startJanitor } from "./sandbox.ts";
 import { MODEL } from "./llm.ts";
@@ -28,6 +29,7 @@ export const TARGETS: Record<string, { label: string; description: string }> = {
 };
 
 const runs = new Map<string, Run>();
+const approvalTokens = new Map<string, string>();
 // Benchmark canary: requests that reach it came from outside the sandbox.
 const canaryHits = new Map<string, number>();
 const hitCanary = (token: string) => {
@@ -110,7 +112,7 @@ function json(res: http.ServerResponse, status: number, body: unknown) {
 }
 
 async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
-  let body: { target?: string; url?: string; token?: string } = {};
+  let body: { target?: string; url?: string; token?: string; approval?: boolean } = {};
   try {
     body = JSON.parse((await readBody(req)) || "{}");
   } catch {
@@ -165,15 +167,20 @@ async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
     blockedRequests: 0,
     usage: { promptTokens: 0, completionTokens: 0 },
     events: [],
+    approval: body.approval === true && !compromised,
   };
   runs.set(run.id, run);
+  // Only whoever started the run can approve its actions.
+  const approvalToken = run.approval ? randomBytes(16).toString("hex") : undefined;
+  if (approvalToken) approvalTokens.set(run.id, approvalToken);
   executeRun(run, emitFor(run)).finally(async () => {
+    approvalTokens.delete(run.id);
     await writeFile(path.join(DATA_DIR, run.id, "run.json"), JSON.stringify(run)).catch(() => {});
     // Sent after teardown, so viewers see "Sandbox destroyed" before the stream closes.
     for (const l of listeners.get(run.id) ?? []) l.end(`data: ${JSON.stringify({ run: summary(run), end: true })}\n\n`);
     listeners.delete(run.id);
   });
-  json(res, 201, { id: run.id });
+  json(res, 201, { id: run.id, approvalToken });
 }
 
 function streamEvents(run: Run, req: http.IncomingMessage, res: http.ServerResponse) {
@@ -233,6 +240,19 @@ const server = http.createServer(async (req, res) => {
       if (!run) return json(res, 404, { error: "not found" });
       if (parts.length === 3) return json(res, 200, run);
       if (parts[3] === "events") return streamEvents(run, req, res);
+      if (parts[3] === "approve" && req.method === "POST") {
+        let body: { token?: string; approve?: boolean } = {};
+        try {
+          body = JSON.parse((await readBody(req)) || "{}");
+        } catch {
+          return json(res, 400, { error: "invalid request body" });
+        }
+        const expected = approvalTokens.get(run.id);
+        const given = Buffer.from(String(body.token ?? ""));
+        if (!expected || given.length !== expected.length || !timingSafeEqual(given, Buffer.from(expected))) return json(res, 403, { error: "not allowed" });
+        if (!decideApproval(run.id, body.approve === true)) return json(res, 409, { error: "nothing is waiting for approval" });
+        return json(res, 200, { ok: true });
+      }
       if (parts[3] === "shots" && /^step-\d+\.jpg$/.test(parts[4] ?? "")) {
         const file = path.join(DATA_DIR, run.id, parts[4]);
         if (!existsSync(file)) return json(res, 404, { error: "not found" });
