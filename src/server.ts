@@ -25,7 +25,7 @@ export const TARGETS: Record<string, { label: string; description: string }> = {
   trap: { label: "Hostile page", description: "Hidden prompt injection, form exfiltration and a cloud-metadata grab." },
   compromised: {
     label: "Compromised agent (red team)",
-    description: "Same hostile page. The model is told to trust it; if it refuses, a fully compromised agent is simulated. Policy off: only the sandbox is left.",
+    description: "Same hostile page, but the agent is a model told to trust it, with the action policy off. Only the sandbox is left.",
   },
 };
 

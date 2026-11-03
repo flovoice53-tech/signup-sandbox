@@ -2,6 +2,10 @@
 // LLM_BASE_URL can point at any compatible endpoint for local development.
 const BASE_URL = process.env.LLM_BASE_URL ?? "https://api.vultrinference.com/v1";
 export const MODEL = process.env.LLM_MODEL ?? "";
+// The model that plays the compromised agent in red-team mode. A smaller model
+// that follows page instructions makes layer 1 a real test; the main model
+// (which usually refuses) is used when this is unset.
+export const RED_TEAM_MODEL = process.env.RED_TEAM_MODEL || MODEL;
 // Send page screenshots too, for models that accept images.
 export const VISION = process.env.LLM_VISION === "1";
 
@@ -12,7 +16,7 @@ export type Usage = { promptTokens: number; completionTokens: number };
 
 let lastCall = 0;
 
-export async function chat(messages: ChatMessage[], maxTokens?: number): Promise<{ text: string; usage: Usage }> {
+export async function chat(messages: ChatMessage[], maxTokens?: number, model = MODEL): Promise<{ text: string; usage: Usage }> {
   if (!process.env.LLM_API_KEY || !MODEL) throw new Error("LLM_API_KEY and LLM_MODEL must be set");
   // Optional spacing between calls, for free-tier endpoints with a per-minute cap.
   const wait = lastCall + Number(process.env.LLM_MIN_INTERVAL_MS ?? 0) - Date.now();
@@ -26,7 +30,7 @@ export async function chat(messages: ChatMessage[], maxTokens?: number): Promise
       res = await fetch(`${BASE_URL}/chat/completions`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${process.env.LLM_API_KEY}` },
-        body: JSON.stringify({ model: MODEL, messages, temperature: 0, max_tokens: maxTokens ?? Number(process.env.LLM_MAX_TOKENS ?? 3000) }),
+        body: JSON.stringify({ model, messages, temperature: 0, max_tokens: maxTokens ?? Number(process.env.LLM_MAX_TOKENS ?? 3000) }),
         signal: AbortSignal.timeout(90_000),
       });
     } catch (err) {

