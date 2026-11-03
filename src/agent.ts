@@ -138,7 +138,7 @@ export async function executeRun(run: Run, emit: (e: RunEvent) => void) {
     say(
       "info",
       DRIVER === "docker"
-        ? `Starting sandbox: isolated network, egress only to ${allowedHosts.join(", ")}, ${LIMITS.memory} RAM, ${LIMITS.cpus} CPU, ${LIMITS.pids} processes, no capabilities, read-only filesystem, no secrets.`
+        ? `Starting sandbox: isolated network, egress only to ${allowedHosts.join(", ")}, ${LIMITS.memory} RAM, ${LIMITS.cpus} CPU, ${LIMITS.pids} processes, no capabilities, read-only filesystem, no long-lived secrets.`
         : `Starting sandbox (local development driver): egress only to ${allowedHosts.join(", ")}. No OS-level isolation in this mode.`,
     );
     const blockedByHost = new Map<string, number>();

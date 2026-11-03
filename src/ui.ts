@@ -115,7 +115,7 @@ function watch(id, cfg){
 async function loadRecent(cfg){
   const list = await (await fetch("/api/runs")).json();
   if (!list.length) { $("recent").innerHTML = ""; return; }
-  const label = (r) => { const key = r.compromised ? "compromised" : r.targetUrl.split("/").pop(); return (cfg.targets[key] && cfg.targets[key].label) || r.targetUrl; };
+  const label = (r) => { const last = r.targetUrl.split("/").pop(); const key = r.compromised ? "compromised" : (last === "notes" ? "trap" : last); return (cfg.targets[key] && cfg.targets[key].label) || r.targetUrl; };
   $("recent").innerHTML = '<h2>Recent runs</h2>' + list.slice(0, 8).map(r =>
     '<button class="run" data-id="'+esc(r.id)+'"><span class="st '+esc(r.status)+'">'+esc(r.status)+'</span><span>'+esc(label(r))+'</span><span class="m">'+esc(r.steps)+' steps · '+esc(r.blockedRequests)+' blocked · '+esc(new Date(r.startedAt).toLocaleString())+'</span></button>').join("");
   document.querySelectorAll(".run").forEach(b => b.onclick = () => { watch(b.dataset.id, cfg); window.scrollTo({top:0, behavior:"smooth"}); });
