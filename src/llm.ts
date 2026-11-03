@@ -12,7 +12,7 @@ export type Usage = { promptTokens: number; completionTokens: number };
 
 let lastCall = 0;
 
-export async function chat(messages: ChatMessage[]): Promise<{ text: string; usage: Usage }> {
+export async function chat(messages: ChatMessage[], maxTokens?: number): Promise<{ text: string; usage: Usage }> {
   if (!process.env.LLM_API_KEY || !MODEL) throw new Error("LLM_API_KEY and LLM_MODEL must be set");
   // Optional spacing between calls, for free-tier endpoints with a per-minute cap.
   const wait = lastCall + Number(process.env.LLM_MIN_INTERVAL_MS ?? 0) - Date.now();
@@ -26,7 +26,7 @@ export async function chat(messages: ChatMessage[]): Promise<{ text: string; usa
       res = await fetch(`${BASE_URL}/chat/completions`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${process.env.LLM_API_KEY}` },
-        body: JSON.stringify({ model: MODEL, messages, temperature: 0, max_tokens: Number(process.env.LLM_MAX_TOKENS ?? 1500) }),
+        body: JSON.stringify({ model: MODEL, messages, temperature: 0, max_tokens: maxTokens ?? Number(process.env.LLM_MAX_TOKENS ?? 3000) }),
         signal: AbortSignal.timeout(90_000),
       });
     } catch (err) {

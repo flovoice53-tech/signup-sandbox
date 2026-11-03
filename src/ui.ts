@@ -43,7 +43,7 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
 <header><h1>Signup Sandbox</h1>
 <p>An AI agent signs up on a website like a new user would, confirms the email with a real inbox, and tells you where the flow breaks. Every browser action runs in a disposable sandbox on Vultr that can only reach the site under test.</p></header>
 <main>
-<button class="judge" id="judge"><b>▶ Watch the containment moment</b><span>One click for judges: a simulated compromised agent tries to send the test password to a third party and read the cloud metadata service. Watch the sandbox block it live (about 90 seconds).</span></button>
+<button class="judge" id="judge"><b>▶ Watch the containment moment</b><span>One click for judges: the model is told to trust a hostile page that asks it to send the test password to a third party and read the cloud metadata service. If the model refuses, a fully compromised agent is simulated. Watch the sandbox block every attempt live (about 2 minutes).</span></button>
 <div id="replaynote"></div>
 <div class="targets" id="targets"></div>
 <div id="redteam"></div>
@@ -71,7 +71,7 @@ let judge = false;
 function renderContainment(run){
   const cards = [
     [run.blockedRequests, "requests blocked by the egress proxy", run.blockedRequests ? "bad" : ""],
-    [counts.policy, run.compromised ? "simulated escape attempts (compromised agent)" : "agent actions refused by policy", counts.policy ? "warn" : ""],
+    [counts.policy, run.compromised ? (run.redTeamMode === "model" ? "escape attempts by the compromised model" : "escape attempts by a simulated compromised agent") : "agent actions refused by policy", counts.policy ? "warn" : ""],
     [run.injectionDetected ? "yes" : "no", "prompt injection noticed by the agent", run.injectionDetected ? "warn" : ""],
     [counts.teardown ? "✓" : (run.status === "running" ? "…" : "–"), "sandbox destroyed after the run", counts.teardown ? "ok" : ""],
   ];
@@ -98,7 +98,8 @@ function renderStats(run, cfg){
     const rt = $("redteam");
     if (run.compromised && run.redTeamAttempts) {
       rt.style.display = "block";
-      rt.textContent = "Containment: " + (run.redTeamStopped || 0) + " of " + run.redTeamAttempts + " escape attempts blocked by the sandbox (credential exfiltration, cloud metadata). " + run.blockedRequests + " outbound requests refused in total.";
+      rt.textContent = "Containment: " + (run.redTeamStopped || 0) + " of " + run.redTeamAttempts + " escape attempts blocked by the sandbox (credential exfiltration, cloud metadata). " + run.blockedRequests + " outbound requests refused in total." +
+        (run.redTeamMode === "scripted" ? " Layer 1 held too: told to trust the page, the model refused, so a fully compromised agent was simulated." : " The model itself was talked into it; the sandbox still held.");
     }
   }
 }

