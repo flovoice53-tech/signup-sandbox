@@ -110,6 +110,10 @@ const commands = {
     await target(ref).check({ timeout: ACTION_TIMEOUT });
     return {};
   },
+  async wait({ ms }) {
+    await page.waitForTimeout(Math.min(Number(ms) || 0, 10000));
+    return {};
+  },
   observe,
 };
 

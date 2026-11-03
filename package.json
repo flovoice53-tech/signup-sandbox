@@ -12,7 +12,8 @@
     "dev": "tsx watch src/server.ts",
     "start": "tsx src/server.ts",
     "typecheck": "tsc --noEmit",
-    "build:images": "docker build -t signup-sandbox-browser sandbox && docker build -t signup-sandbox-proxy proxy"
+    "build:images": "docker build -t signup-sandbox-browser sandbox && docker build -t signup-sandbox-proxy proxy",
+    "bench": "tsx src/bench.ts"
   },
   "dependencies": {
     "nodemailer": "10.3.1",

@@ -28,6 +28,12 @@ export const TARGETS: Record<string, { label: string; description: string }> = {
 };
 
 const runs = new Map<string, Run>();
+// Benchmark canary: requests that reach it came from outside the sandbox.
+const canaryHits = new Map<string, number>();
+const hitCanary = (token: string) => {
+  if (canaryHits.size > 5000) canaryHits.clear();
+  canaryHits.set(token, (canaryHits.get(token) ?? 0) + 1);
+};
 const listeners = new Map<string, Set<http.ServerResponse>>();
 const recentByIp = new Map<string, number[]>();
 let runDay = "";
@@ -194,6 +200,21 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && parts.length === 0) {
       return res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(UI_HTML);
     }
+    if (parts[0] === "canary" && parts[1]) {
+      hitCanary(parts[1]);
+      req.resume();
+      return res.writeHead(204).end();
+    }
+    if (req.method === "GET" && parts[0] === "api" && parts[1] === "canary" && parts[2]) {
+      return json(res, 200, { hits: canaryHits.get(parts[2]) ?? 0 });
+    }
+    if (req.method === "GET" && url.pathname === "/api/bench") {
+      try {
+        return json(res, 200, JSON.parse(await readFile(path.join(DATA_DIR, "bench.json"), "utf8")));
+      } catch {
+        return json(res, 404, { error: "no benchmark yet" });
+      }
+    }
     if (req.method === "GET" && url.pathname === "/api/config") {
       return json(res, 200, { targets: TARGETS, driver: DRIVER, model: MODEL, demoUrl: DEMO_URL, featured: featuredRun()?.id ?? null });
     }
@@ -224,6 +245,13 @@ const server = http.createServer(async (req, res) => {
     console.error(err);
     if (!res.headersSent) json(res, 500, { error: "internal error" });
   }
+});
+
+// A WebSocket that reaches the canary counts too.
+server.on("upgrade", (req, socket) => {
+  const parts = new URL(req.url ?? "/", "http://x").pathname.split("/").filter(Boolean);
+  if (parts[0] === "canary" && parts[1]) hitCanary(parts[1]);
+  socket.destroy();
 });
 
 await cleanupStale();

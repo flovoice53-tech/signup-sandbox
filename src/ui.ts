@@ -36,6 +36,7 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
 @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,92,92,0)}50%{box-shadow:0 0 0 4px rgba(255,92,92,.55)}}
 .ev.hl{animation:pulse 1.2s ease-in-out 3;border-left-width:6px}#redteam.hl{animation:pulse 1.2s ease-in-out 4}
 .target.red{border-color:#5a2026}.target.red b{color:#ff8a8a}
+#bench{margin-top:24px}#bench h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}#bench .sum{font-size:16px;font-weight:700;margin-bottom:8px}#bench table{width:100%;border-collapse:collapse;font-size:13px}#bench td,#bench th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}#bench th{color:var(--muted);font-weight:600}#bench .ok{color:var(--ok);font-weight:700}#bench .bad{color:var(--bad);font-weight:700}#bench .m{color:var(--muted);font-size:12px;margin-top:6px}
 #recent{margin-top:20px}#recent h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
 .run{display:flex;gap:10px;align-items:center;padding:7px 10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;margin:5px 0;cursor:pointer;font-size:13px;color:inherit;width:100%;text-align:left;font-family:inherit}
 .run:hover{border-color:var(--accent)}.run .st{font-weight:600;min-width:60px}.run .st.passed{color:var(--ok)}.run .st.failed{color:var(--warn)}.run .st.error{color:var(--bad)}.run .st.running{color:var(--accent)}.run .m{color:var(--muted)}
@@ -56,6 +57,7 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
   <div class="panel"><h2>What the sandboxed browser sees</h2><img id="shot" alt="Sandbox browser screenshot"></div>
 </div>
 <div id="recent"></div>
+<div id="bench"></div>
 <div class="how"><p><b>Containment.</b> Each run gets its own isolated Docker network. The browser container has no capabilities, a read-only filesystem, memory/CPU/process limits and no long-lived secrets (the LLM key and inbox secret stay outside); its only way out is an egress proxy that allows the site under test and refuses private addresses, including the cloud metadata service. The model's actions are checked against the same policy before they run. When the run ends, the browser, the proxy and the network are deleted.</p>
 <p><b>Secrets stay outside.</b> The test inbox (receivemail.dev) is read by the orchestrator, not the browser. The only credential the browser ever holds is a throwaway per-run test password, which it needs to type; the model only ever sees placeholders such as <code>{{password}}</code>.</p></div>
 </main>
@@ -174,6 +176,17 @@ async function loadRecent(cfg){
   document.querySelectorAll(".run").forEach(b => b.onclick = () => { watch(b.dataset.id, cfg); window.scrollTo({top:0, behavior:"smooth"}); });
 }
 
+async function loadBench(){
+  const res = await fetch("/api/bench");
+  if (!res.ok) return;
+  const b = await res.json();
+  const out = (c) => c.offsiteAllowed + c.canaryHits === 0;
+  $("bench").innerHTML = '<h2>Containment benchmark</h2><div class="sum">' + esc(b.attacks) + ' attacks · ' + esc(b.blocked) + ' requests blocked · ' + esc(b.offsiteAllowed) + ' got out · canary hits ' + esc(b.canaryHits) + '</div>' +
+    '<table><tr><th>Attack page</th><th>Blocked</th><th>Got out</th></tr>' +
+    b.cases.map(c => '<tr><td>' + esc(c.label) + '</td><td>' + esc(c.blocked) + '</td><td class="' + (out(c) ? 'ok">nothing' : 'bad">' + esc(c.offsiteAllowed + c.canaryHits)) + '</td></tr>').join("") + '</table>' +
+    '<div class="m">Each attack page tries to send data to a canary on our own server, so anything that really left the sandbox would be counted there; a control request from outside the sandbox was counted (' + esc(b.controlHits) + '). Model-free and deterministic (npm run bench), run ' + esc(new Date(b.at).toLocaleString()) + '.</div>';
+}
+
 function setBusy(b){ document.querySelectorAll(".target, .judge").forEach(t => t.disabled = b); }
 
 (async () => {
@@ -196,6 +209,7 @@ function setBusy(b){ document.querySelectorAll(".target, .judge").forEach(t => t
     watch(data.id, cfg);
   });
   loadRecent(cfg);
+  loadBench();
   const existing = new URLSearchParams(location.search).get("run");
   if (existing) watch(existing, cfg);
 })();
