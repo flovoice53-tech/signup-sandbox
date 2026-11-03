@@ -6,7 +6,7 @@ An AI agent that tests a website's signup flow end to end, the way a new user wo
 
 Every browser action runs inside a disposable sandbox on Vultr that can only reach the site under test. Pages are untrusted input, so the agent is built to survive hostile ones: prompt injection, scripts that try to exfiltrate data, and attempts to read the cloud metadata service.
 
-Every verdict is checked, not just claimed: the agent can't report "passed" until a verification email has actually arrived, and on the demo sites the server independently confirms the account was verified.
+Every verdict is checked, not just claimed: the agent can't report "passed" until a verification email has actually arrived, on the demo sites the server independently confirms the account was verified, and a separate vision call on Vultr Serverless Inference looks only at the final screenshot and must agree that the user is signed in and verified.
 
 ## Why
 
