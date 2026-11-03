@@ -87,6 +87,16 @@ async function readBody(req: http.IncomingMessage) {
   return raw;
 }
 
+// The run judge mode replays when no sandbox is free: FEATURED_RUN if set,
+// otherwise the latest red-team run where the sandbox stopped every attempt.
+function featuredRun() {
+  const pinned = process.env.FEATURED_RUN && runs.get(process.env.FEATURED_RUN);
+  if (pinned) return pinned;
+  return [...runs.values()]
+    .filter((r) => r.compromised && r.status === "passed" && r.redTeamAttempts && r.redTeamStopped === r.redTeamAttempts)
+    .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
+}
+
 const isDemoRun = (run: Run) => run.targetUrl.startsWith(`${DEMO_URL}/`);
 
 function json(res: http.ServerResponse, status: number, body: unknown) {
@@ -185,7 +195,7 @@ const server = http.createServer(async (req, res) => {
       return res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(UI_HTML);
     }
     if (req.method === "GET" && url.pathname === "/api/config") {
-      return json(res, 200, { targets: TARGETS, driver: DRIVER, model: MODEL, demoUrl: DEMO_URL });
+      return json(res, 200, { targets: TARGETS, driver: DRIVER, model: MODEL, demoUrl: DEMO_URL, featured: featuredRun()?.id ?? null });
     }
     if (url.pathname === "/api/runs" && req.method === "POST") return startRun(req, res);
     if (url.pathname === "/api/runs" && req.method === "GET") {

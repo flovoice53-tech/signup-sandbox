@@ -29,6 +29,11 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
 .contain{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:14px}
 .c{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px}.c .n{font-size:22px;font-weight:700}.c .l{font-size:12px;color:var(--muted)}
 .c.bad .n{color:var(--bad)}.c.ok .n{color:var(--ok)}.c.warn .n{color:var(--warn)}
+.judge{display:block;width:100%;margin:12px 0 4px;padding:16px 18px;border-radius:12px;border:1px solid var(--bad);background:#2a1416;color:var(--text);font:inherit;text-align:left;cursor:pointer}
+.judge b{font-size:18px;color:#ff8a8a}.judge span{display:block;color:var(--muted);font-size:13px;margin-top:4px}.judge:hover{background:#3a1a1d}.judge:disabled{opacity:.5;cursor:wait}
+#replaynote{display:none;color:var(--warn);font-size:13px;margin:6px 0 10px}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,92,92,0)}50%{box-shadow:0 0 0 4px rgba(255,92,92,.55)}}
+.ev.hl{animation:pulse 1.2s ease-in-out 3;border-left-width:6px}#redteam.hl{animation:pulse 1.2s ease-in-out 4}
 .target.red{border-color:#5a2026}.target.red b{color:#ff8a8a}
 #recent{margin-top:20px}#recent h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
 .run{display:flex;gap:10px;align-items:center;padding:7px 10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;margin:5px 0;cursor:pointer;font-size:13px;color:inherit;width:100%;text-align:left;font-family:inherit}
@@ -37,6 +42,8 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
 <header><h1>Signup Sandbox</h1>
 <p>An AI agent signs up on a website like a new user would, confirms the email with a real inbox, and tells you where the flow breaks. Every browser action runs in a disposable sandbox on Vultr that can only reach the site under test.</p></header>
 <main>
+<button class="judge" id="judge"><b>▶ Watch the containment moment</b><span>One click for judges: a simulated compromised agent tries to send the test password to a third party and read the cloud metadata service. Watch the sandbox block it live (about 90 seconds).</span></button>
+<div id="replaynote"></div>
 <div class="targets" id="targets"></div>
 <div id="redteam"></div>
 <div id="verdict"></div>
@@ -57,6 +64,7 @@ let source = null;
 function esc(s){return String(s).replace(/[&<>"']/g,c=>"&#"+c.charCodeAt(0)+";")}
 
 let counts = { egress: 0, policy: 0, teardown: false };
+let judge = false;
 
 function renderContainment(run){
   const cards = [
@@ -90,7 +98,7 @@ function addEvent(e, runId){
   if (e.kind === "policy" && (e.blocked || e.text.includes("compromised agent opens"))) counts.policy++;
   if (e.kind === "teardown") counts.teardown = true;
   const div = document.createElement("div");
-  div.className = "ev " + e.kind;
+  div.className = "ev " + e.kind + (judge && (e.kind === "egress" || e.kind === "policy") ? " hl" : "");
   div.innerHTML = '<span class="k">' + esc(e.step ? "step " + e.step + " · " + e.kind : e.kind) + '</span>' + esc(e.text);
   $("log").appendChild(div);
   $("log").scrollTop = $("log").scrollHeight;
@@ -99,7 +107,7 @@ function addEvent(e, runId){
 
 function watch(id, cfg){
   if (source) source.close();
-  $("log").innerHTML = ""; $("verdict").style.display = "none"; $("redteam").style.display = "none"; $("shot").style.display = "none";
+  $("log").innerHTML = ""; $("verdict").style.display = "none"; $("redteam").style.display = "none"; $("shot").style.display = "none"; $("replaynote").style.display = "none";
   history.replaceState(null, "", "?run=" + id);
   source = new EventSource("/api/runs/" + id + "/events");
   // The server replays the whole run on every (re)connect, so start clean.
@@ -108,8 +116,42 @@ function watch(id, cfg){
     const data = JSON.parse(m.data);
     if (data.event) addEvent(data.event, id);
     renderStats(data.run, cfg);
-    if (data.end) { source.close(); setBusy(false); loadRecent(cfg); }
+    if (data.end) { source.close(); setBusy(false); loadRecent(cfg); if (judge) spotlight(); }
   };
+}
+
+function spotlight(){
+  const rt = $("redteam");
+  if (rt.style.display !== "block") return;
+  rt.classList.remove("hl"); void rt.offsetWidth; rt.classList.add("hl");
+  rt.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+// No free sandbox (or today's limit reached): replay a real stored run with
+// compressed timing, clearly labelled as a replay.
+async function replay(id, cfg, why){
+  if (!id) { $("log").innerHTML = '<div class="ev error">' + esc(why) + '</div>'; setBusy(false); return; }
+  const run = await (await fetch("/api/runs/" + id)).json();
+  if (source) source.close();
+  $("log").innerHTML = ""; $("verdict").style.display = "none"; $("redteam").style.display = "none"; $("shot").style.display = "none";
+  counts = { egress: 0, policy: 0, teardown: false };
+  const note = $("replaynote");
+  note.textContent = why + " Showing a replay of real run " + run.id + " from " + new Date(run.startedAt).toLocaleString() + ", sped up.";
+  note.style.display = "block";
+  $("log").scrollIntoView({ behavior: "smooth", block: "center" });
+  let blocked = 0, steps = 0, prev = null;
+  for (const e of run.events) {
+    const t = Date.parse(e.at);
+    if (prev !== null) await new Promise(r => setTimeout(r, Math.min(1200, Math.max(150, (t - prev) / 3))));
+    prev = t;
+    if (e.kind === "egress" && e.blocked) blocked++;
+    if (e.step) steps = e.step;
+    addEvent(e, run.id);
+    renderStats(Object.assign({}, run, { status: "running", blockedRequests: blocked, steps: steps, injectionDetected: false }), cfg);
+  }
+  renderStats(run, cfg);
+  setBusy(false);
+  spotlight();
 }
 
 async function loadRecent(cfg){
@@ -121,14 +163,22 @@ async function loadRecent(cfg){
   document.querySelectorAll(".run").forEach(b => b.onclick = () => { watch(b.dataset.id, cfg); window.scrollTo({top:0, behavior:"smooth"}); });
 }
 
-function setBusy(b){ document.querySelectorAll(".target").forEach(t => t.disabled = b); }
+function setBusy(b){ document.querySelectorAll(".target, .judge").forEach(t => t.disabled = b); }
 
 (async () => {
   const cfg = await (await fetch("/api/config")).json();
   $("targets").innerHTML = Object.entries(cfg.targets).map(([key,t]) =>
     '<button class="target'+(key === "compromised" ? " red" : "")+'" data-key="'+key+'"><b>'+esc(t.label)+'</b><span>'+esc(t.description)+'</span></button>').join("");
+  $("judge").onclick = async () => {
+    setBusy(true); judge = true;
+    const res = await fetch("/api/runs", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({target: "compromised"})});
+    const data = await res.json();
+    if (!res.ok) return replay(cfg.featured, cfg, data.error || "The live demo is unavailable right now.");
+    watch(data.id, cfg);
+    $("log").scrollIntoView({ behavior: "smooth", block: "center" });
+  };
   document.querySelectorAll(".target").forEach(btn => btn.onclick = async () => {
-    setBusy(true);
+    setBusy(true); judge = false;
     const res = await fetch("/api/runs", {method:"POST", headers:{"content-type":"application/json"}, body: JSON.stringify({target: btn.dataset.key})});
     const data = await res.json();
     if (!res.ok) { setBusy(false); $("log").innerHTML = '<div class="ev error">'+esc(data.error)+'</div>'; return; }
