@@ -106,6 +106,17 @@ Tick "Human in the loop" on the demo page (or send `"approval": true` when start
 
 Beyond the demo sites, the agent was pointed at a live product by the same author: the signup of [SMS Send](https://sms.flo-voice1.com/register), a separate outbound-SMS service. It filled in the form with a throwaway receivemail.dev address, submitted it and reached the signed-in dashboard in 4 steps; the vision check confirmed the signed-in page ([run 2fcb5fa65d93](https://sandbox.flo-voice1.com/?run=2fcb5fa65d93)). SMS Send has no email verification step, so that run used the operator-only `noEmail` option: "done" then needs no email, and the vision check becomes mandatory (if it is unavailable, the run ends as an error instead of passing). Custom URLs need the operator's `RUN_TOKEN`, so the public demo can't be pointed at other people's sites.
 
+## Use the sandbox in your own agent
+
+Nothing in the containment is specific to signup testing. Any agent that drives a browser on pages it doesn't trust can reuse the same pieces (MIT licensed):
+
+1. **`src/sandbox.ts`**: per run, an `--internal` Docker network in isolated-gateway mode, an egress proxy container, and a locked-down browser container (gVisor, no capabilities, read-only, no secrets, no DNS) that takes JSON commands over stdin and answers on stdout.
+2. **`proxy/proxy.mjs`**: the egress proxy. Pass `ALLOW_HOSTS`; it refuses everything else before any DNS lookup, refuses private addresses after it, checks the name inside every HTTPS tunnel, and logs each decision as one JSON line.
+3. **`sandbox/runner.mjs`**: the in-container side (Playwright): `goto`, `observe` (URL, text, interactive elements, screenshot), `fill`, `click`, `wait`.
+4. **`src/bench.ts` + `dns-canary/`**: the model-free benchmark, so you can check your own setup the same way, with HTTP and DNS canaries outside the sandbox.
+
+Keep your model key and other secrets in the orchestrator, outside the box, as this project does.
+
 ## Threat model and limits
 
 What the sandbox is built to contain: a hostile page, and an agent (model) that the page has fully taken over, including code execution inside the browser container. What it protects: the LLM key and inbox secret, the cloud metadata service, the host, the orchestrator, the LAN, and every site other than the one under test.
@@ -122,7 +133,7 @@ What it deliberately does not stop, and other limits:
 ## How Vultr is used
 
 - **Vultr Cloud Compute** (`vc2-2c-4gb`, Frankfurt, Ubuntu 24.04) runs the orchestrator, the web app, Caddy for HTTPS, and every sandbox (Docker).
-- **Vultr Serverless Inference** is the agent's brain: every decision is a chat completion to `glm-5.3` at `https://api.vultrinference.com/v1`, with the page screenshot attached when the endpoint accepts it (it occasionally refuses an image; that step then goes text-only). A separate vision call then checks the final screenshot. A normal run is about 9 steps and 12k tokens; a red-team run about 13 steps and 28k–33k tokens.
+- **Vultr Serverless Inference** is the agent's brain: every decision is a chat completion to `glm-5.3` at `https://api.vultrinference.com/v1`, with the page screenshot attached when the endpoint accepts it (it occasionally refuses an image; that step then goes text-only). A separate vision call then checks the final screenshot. A normal run is about 9 steps and 12k tokens; a red-team run about 13 steps and 28k–33k tokens. At Vultr's published Serverless Inference rate ($0.55 per million input tokens, $2.75 per million output tokens) and the measured token counts (about 10.9k in / 1.3k out for a normal run, 16.4k / 10.4k for a red-team run), that is about 1 cent per normal run and about 4 cents per red-team run. Monitoring one flow every 6 hours is about 120 runs, or $1.20, a month.
 - The sandbox's most valuable target on Vultr is the instance metadata service at `169.254.169.254`; the hostile demo page tries to read it on every run and is blocked.
 
 ## Red-team mode: a compromised agent
