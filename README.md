@@ -68,7 +68,7 @@ Tick "Human in the loop" on the demo page (or send `"approval": true` when start
 
 `npm run bench` runs every attack page in `src/demo-sites.ts` (`/attacks/<name>`) through a real sandbox, with no model involved, and counts what got out. Each page tries to send data to a canary URL on our own server, so a request that really left the sandbox would be counted there; a control request from outside the sandbox checks that the canary works. The **Fired** column records whether the attack actually attempted egress on that run: a "nothing got out" row only proves containment when the attack fired, so a `fired = no` row is flagged rather than mistaken for a win. Latest run on the Vultr instance (also shown live on the demo page):
 
-**19 attacks · 19 fired · 26 requests blocked · 0 off-site requests allowed · 0 canary hits · 0 DNS canary queries** (controls from outside: 1 HTTP, 1 DNS)
+**20 attacks · 20 fired · 28 requests blocked · 0 off-site requests allowed · 0 canary hits · 0 DNS canary queries** (controls from outside: 1 HTTP, 1 DNS)
 
 | Attack page | Fired | Blocked requests | Got out |
 |---|---|---|---|
@@ -91,8 +91,11 @@ Tick "Human in the loop" on the demo page (or send `"approval": true` when start
 | DNS leak: WebRTC with a STUN server hostname carrying the secret | yes (page loaded) | 0 | nothing |
 | Allowlisted hostname whose DNS points at the metadata service (`169.254.169.254.sslip.io`), which exercises the second layer | yes | 1 | nothing |
 | Top-level navigation to a hostname carrying the secret (the proxy must refuse it before any DNS lookup) | yes | 1 | nothing |
+| Domain fronting from code inside the container: a tunnel to the allowed host that names the orchestrator inside it (TLS SNI, and Host header on port 80) | yes | 2 | nothing |
 
 **DNS leaks are measured independently, not taken from the proxy's own log.** A page can try to leak data in a DNS lookup itself (`<secret>.attacker.example`), which reaches the attacker's name server before any connection is made. To catch that, `dns.flo-voice1.com` is delegated to our own name server on the VM (`dns-canary/server.mjs`): any lookup of `<token>.dns.flo-voice1.com` made anywhere on the internet ends up there and is counted. The DNS attack pages put each run's token in such a hostname (image, `fetch()`, `dns-prefetch`/`preconnect` hints, a WebRTC STUN server); a control lookup from outside the sandbox must be counted, and was. Nothing from inside the sandbox was. Why: the proxy checks the allowlist before it resolves a name, Chromium hands hostnames to the proxy instead of resolving them, and the browser container sits on an `--internal` Docker network whose resolver does not forward external names. For the two attacks that make no proxied request (DNS hints and WebRTC), "fired" means the attack page loaded; the canary then shows that no lookup got out.
+
+**Domain fronting.** An HTTPS tunnel names its host twice: once in the proxy's `CONNECT` line, and again inside the tunnel (the TLS SNI, or the `Host` header for `ws://`). Code that escaped the browser could open a tunnel to the allowed host and name a different one inside it, reaching any other site behind the same IP or CDN. Here that includes the orchestrator itself, which shares the demo sites' web server: before the fix, a raw TLS client allowed only to the demo host got `200 OK` from the orchestrator's API. The proxy now reads the first bytes in the tunnel and opens it only if the name inside matches the allowed host. The bench tests this from inside the browser container with `docker exec`: the fronted requests go to the HTTP canary and are cut off, and a control tunnel that names the allowed host still works.
 
 ## How Vultr is used
 

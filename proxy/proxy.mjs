@@ -99,7 +99,47 @@ const server = http.createServer(async (req, res) => {
   req.pipe(upstream);
 });
 
-// https: the browser asks for a tunnel with CONNECT host:port.
+// The name the client really asks for inside the tunnel: the SNI of a TLS
+// ClientHello, or the Host header of a plain HTTP request (ws:// over a
+// proxy). Returns undefined while more bytes are needed, null if there is none.
+function innerHost(buf) {
+  if (buf.length === 0) return undefined;
+  if (buf[0] === 0x16) {
+    if (buf.length < 5) return undefined;
+    const end = 5 + buf.readUInt16BE(3);
+    if (buf.length < end) return undefined;
+    try {
+      let p = 5;
+      if (buf[p] !== 0x01) return null; // not a ClientHello
+      p += 4 + 2 + 32; // handshake header, version, random
+      p += 1 + buf[p]; // session id
+      p += 2 + buf.readUInt16BE(p); // cipher suites
+      p += 1 + buf[p]; // compression methods
+      const extEnd = Math.min(end, p + 2 + buf.readUInt16BE(p));
+      p += 2;
+      while (p + 4 <= extEnd) {
+        const type = buf.readUInt16BE(p);
+        const len = buf.readUInt16BE(p + 2);
+        if (type === 0 && buf[p + 6] === 0) return buf.toString("latin1", p + 9, p + 9 + buf.readUInt16BE(p + 7)).toLowerCase();
+        p += 4 + len;
+      }
+    } catch {
+      // malformed: no name
+    }
+    return null;
+  }
+  const text = buf.toString("latin1");
+  const headEnd = text.indexOf("\r\n\r\n");
+  if (headEnd === -1) return buf.length > 16384 || !/^[A-Z]+ /.test(text.slice(0, 8)) && buf.length >= 8 ? null : undefined;
+  const m = /\r\nhost:[ \t]*([^\r\n]+)/i.exec(text.slice(0, headEnd));
+  return m ? m[1].trim().toLowerCase().replace(/:\d+$/, "").replace(/^\[|\]$/g, "") : null;
+}
+
+// https: the browser asks for a tunnel with CONNECT host:port. The CONNECT
+// line only names the host; the bytes in the tunnel name it again (TLS SNI or
+// HTTP Host), and a client can make the two differ to reach another site that
+// shares the allowed host's IP or CDN ("domain fronting"). So the tunnel only
+// opens once the inner name matches the allowed host.
 server.on("connect", async (req, socket, head) => {
   const [host, portText] = (req.url ?? "").split(/:(?=\d+$)/);
   const port = Number(portText || 443);
@@ -109,15 +149,40 @@ server.on("connect", async (req, socket, head) => {
     socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
     return;
   }
-  log({ type: "allowed", host, port, method: "CONNECT" });
-  const upstream = net.connect(port, verdict.address, () => {
-    socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-    if (head.length) upstream.write(head);
-    upstream.pipe(socket);
-    socket.pipe(upstream);
-  });
-  upstream.on("error", () => socket.destroy());
-  socket.on("error", () => upstream.destroy());
+  socket.on("error", () => {});
+  socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+  let buf = head;
+  const timer = setTimeout(() => decide(null), 10_000);
+  const onData = (chunk) => {
+    buf = Buffer.concat([buf, chunk]);
+    const name = innerHost(buf);
+    if (name !== undefined) decide(name);
+  };
+  let decided = false;
+  function decide(name) {
+    if (decided) return;
+    decided = true;
+    clearTimeout(timer);
+    socket.off("data", onData);
+    socket.pause();
+    if (name !== host.toLowerCase()) {
+      log({ type: "blocked", host, port, method: "CONNECT", inner: name ?? "(none)", reason: `name inside the tunnel (${name ?? "none"}) does not match ${host}` });
+      socket.destroy();
+      return;
+    }
+    log({ type: "allowed", host, port, method: "CONNECT" });
+    const upstream = net.connect(port, verdict.address, () => {
+      upstream.write(buf);
+      upstream.pipe(socket);
+      socket.pipe(upstream);
+      socket.resume();
+    });
+    upstream.on("error", () => socket.destroy());
+    socket.on("error", () => upstream.destroy());
+  }
+  const first = innerHost(buf);
+  if (first !== undefined) decide(first);
+  else socket.on("data", onData);
 });
 
 server.listen(PORT, () => log({ type: "ready", allow: [...ALLOW] }));

@@ -20,7 +20,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export const DRIVER = process.env.SANDBOX_DRIVER === "docker" ? "docker" : "local";
 const EGRESS_NETWORK = "sbx-egress";
 
-export type ProxyEvent = { type: "ready" | "allowed" | "blocked"; host?: string; port?: number; method?: string; path?: string; reason?: string; at: string };
+export type ProxyEvent = { type: "ready" | "allowed" | "blocked"; host?: string; port?: number; method?: string; path?: string; reason?: string; inner?: string; at: string };
 
 export const LIMITS = {
   memory: "1g",
