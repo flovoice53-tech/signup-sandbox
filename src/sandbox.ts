@@ -107,7 +107,10 @@ export class Sandbox {
   private async startDocker(allowHosts: string[]) {
     const net = this.name;
     const proxyName = `${this.name}-proxy`;
-    await docker("network", "create", "--internal", "--label", "sbx=run", net);
+    // --internal drops forwarding out of the network, but the host still sits
+    // on it as the gateway and answers on its own ports (SSH, the web server).
+    // In isolated mode the host has no address on the network at all.
+    await docker("network", "create", "--internal", "-o", "com.docker.network.bridge.gateway_mode_ipv4=isolated", "--label", "sbx=run", net);
     await docker(
       "run", "-d", "--name", proxyName, "--label", "sbx=1",
       "--network", EGRESS_NETWORK,

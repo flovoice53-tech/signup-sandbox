@@ -172,6 +172,46 @@ if (DRIVER === "docker") {
   console.log(`blocked ${fronting.blocked}, canary ${fronting.canaryHits}, control tunnel ${controlOk ? "ok" : "FAILED"} ${JSON.stringify(probes)}`);
 }
 
+// The host itself, reached directly instead of through the proxy: from inside
+// the browser container, try SSH and the web server on every address the
+// host could have from there (a gateway on the run network, the default
+// bridge, the egress network, the public IP). Only the proxy port may answer.
+const HOST_PROBE = `
+const net=require("net");const hosts=process.env.H.split(","),ports=[22,80,443];let left=hosts.length*ports.length;const open=[];
+for(const h of hosts)for(const p of ports){const s=net.connect({host:h,port:p,timeout:3000});const done=(ok)=>{if(ok)open.push(h+":"+p);s.destroy();if(--left===0){console.log(JSON.stringify({open}));process.exit(0)}};
+s.on("connect",()=>done(true));s.on("timeout",()=>done(false));s.on("error",()=>done(false))}`;
+if (DRIVER === "docker") {
+  process.stdout.write("host-direct … ");
+  let tried: string[] = [];
+  let open: string[] = [];
+  const hostCase = await runCase(
+    "host-direct",
+    "Code inside the container connects straight to the host (SSH, web server) instead of going through the proxy",
+    demoHost,
+    async (sb) => {
+      const inspect = async (...a: string[]) => (await execFileP("docker", a)).stdout.trim();
+      const subnet = await inspect("network", "inspect", "-f", "{{range .IPAM.Config}}{{.Subnet}}{{end}}", sb.name);
+      const proxyIp = await inspect("inspect", "-f", `{{(index .NetworkSettings.Networks "${sb.name}").IPAddress}}`, `${sb.name}-proxy`);
+      const egressGw = await inspect("network", "inspect", "-f", "{{range .IPAM.Config}}{{.Gateway}}{{end}}", "sbx-egress").catch(() => "");
+      const publicIp = new URL(CANARY_URL).hostname;
+      const resolved = await dns.lookup(publicIp).then((r) => r.address).catch(() => "");
+      const first = subnet.split("/")[0].split(".").slice(0, 3).join(".") + ".1";
+      tried = [...new Set([first, "172.17.0.1", egressGw, resolved].filter((h) => h && h !== proxyIp))];
+      const { stdout } = await execFileP("docker", ["exec", "-e", `H=${tried.join(",")}`, `${sb.name}-browser`, "node", "-e", HOST_PROBE], { timeout: 60_000 });
+      open = (JSON.parse(stdout.trim().split("\n").pop() || "{}") as { open?: string[] }).open ?? [];
+    },
+  );
+  hostCase.layer = "host not on the run network";
+  hostCase.fired = tried.length > 0;
+  hostCase.firedBy = hostCase.fired ? `probed ${tried.length} host addresses` : "";
+  // A connection that opened is something that got out.
+  hostCase.offsiteAllowed += open.length;
+  (hostCase as Case & { probed?: string[]; open?: string[] }).probed = tried;
+  (hostCase as Case & { open?: string[] }).open = open;
+  cases.push(hostCase);
+  console.log(`probed ${tried.join(", ")} on 22/80/443 → open: ${open.length ? open.join(", ") : "none"}`);
+}
+
 // Controls: the same canaries, hit from outside the sandbox, must count.
 const control = randomBytes(8).toString("hex");
 await fetch(`${CANARY_URL}/${control}`).catch(() => {});
