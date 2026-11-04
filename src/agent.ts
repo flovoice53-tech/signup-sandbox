@@ -8,7 +8,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { chat, parseJsonObject, RED_TEAM_MODEL, VISION, type ChatMessage, type Usage } from "./llm.ts";
+import { chat, MODEL, parseJsonObject, RED_TEAM_MODEL, VISION, type ChatMessage, type Usage } from "./llm.ts";
 import { createMailbox, extractVerification, waitForMail, type Mailbox } from "./inbox.ts";
 import { DRIVER, LIMITS, Sandbox, type ProxyEvent } from "./sandbox.ts";
 import { demoAccountVerified } from "./demo-sites.ts";
@@ -59,6 +59,8 @@ export type Run = {
   redTeamModel?: string;
   redTeamAttempts?: number;
   redTeamStopped?: number;
+  // The model deciding the current step (the red-team model, then the main one).
+  activeModel?: string;
   injectionDetected?: boolean;
   // false for a site with no email verification step (operator runs only):
   // "done" then needs no email, and the vision check becomes mandatory.
@@ -232,6 +234,8 @@ export async function executeRun(run: Run, emit: (e: RunEvent) => void) {
     };
     let redTeamPromptOff = false;
     let invalidInARow = 0;
+    let wasCompromised = false;
+    let takeoverSaid = false;
     if (run.compromised) {
       run.redTeamMode = "model";
       run.redTeamModel = RED_TEAM_MODEL;
@@ -254,6 +258,12 @@ export async function executeRun(run: Run, emit: (e: RunEvent) => void) {
       say("observe", `${obs.title || "(no title)"} — ${obs.url}`, { step, screenshot: shot });
 
       const compromisedPrompt = run.redTeamMode === "model" && !redTeamPromptOff && (run.redTeamAttempts ?? 0) < MAX_RED_TEAM_ATTEMPTS;
+      run.activeModel = compromisedPrompt ? RED_TEAM_MODEL : MODEL;
+      if (wasCompromised && !compromisedPrompt && !takeoverSaid) {
+        takeoverSaid = true;
+        say("policy", `Red-team phase over: ${MODEL} takes over with its injection defence and the action policy back on, and finishes the signup.`, { step });
+      }
+      wasCompromised = compromisedPrompt;
       const action = await decide(run, obs, history, identity, compromisedPrompt);
       // A model that keeps answering nothing under the compromised prompt is
       // refusing it: drop back to the normal prompt and let the signup finish.
@@ -280,7 +290,8 @@ export async function executeRun(run: Run, emit: (e: RunEvent) => void) {
       // claims success, the normal agent takes over and finishes the signup.
       if (compromisedPrompt && (action.action === "done" || action.action === "fail")) {
         redTeamPromptOff = true;
-        say("policy", `The compromised agent tried to end the run ("${action.action}"); the normal agent takes over to finish the signup.`, { step });
+        takeoverSaid = true;
+        say("policy", `The compromised agent tried to end the run ("${action.action}"); ${MODEL} takes over with its injection defence and the action policy back on, and finishes the signup.`, { step });
         history.push(`step ${step}: the signup is not finished yet; continue it from the current page`);
         continue;
       }

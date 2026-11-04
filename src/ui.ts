@@ -70,7 +70,7 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
 <div id="monitors"></div>
 <div id="recent"></div>
 <div id="bench"></div>
-<div class="how"><p><b>Containment.</b> Each run gets its own isolated Docker network. The browser container has no capabilities, a read-only filesystem, memory/CPU/process limits and no long-lived secrets (the LLM key and inbox secret stay outside); its only way out is an egress proxy that allows the site under test and refuses private addresses, including the cloud metadata service. The model's actions are checked against the same policy before they run. When the run ends, the browser, the proxy and the network are deleted.</p>
+<div class="how"><p><b>Containment.</b> Each run gets its own isolated Docker network, on which the host itself has no address. The browser container runs on gVisor (its own user-space kernel), has no DNS, no capabilities, a read-only filesystem, memory/CPU/process limits and no long-lived secrets (the LLM key and inbox secret stay outside); its only way out is an egress proxy that allows the site under test, checks the name inside every HTTPS tunnel, and refuses private addresses, including the cloud metadata service. The model's actions are checked against the same policy before they run. When the run ends, the browser, the proxy and the network are deleted.</p>
 <p><b>Secrets stay outside.</b> The test inbox (receivemail.dev) is read by the orchestrator, not the browser. The only credential the browser ever holds is a throwaway per-run test password, which it needs to type; the model only ever sees placeholders such as <code>{{password}}</code>.</p></div>
 </main>
 <script>
@@ -98,7 +98,7 @@ function renderContainment(run){
 function renderStats(run, cfg){
   renderContainment(run);
   const items = [["Status", run.status], ["Steps", run.steps], ["Blocked requests", run.blockedRequests],
-    ["Tokens", run.usage.promptTokens + run.usage.completionTokens], ["Sandbox", cfg.driver], ["Model", cfg.model || "?"]];
+    ["Tokens", run.usage.promptTokens + run.usage.completionTokens], ["Sandbox", cfg.runtime ? cfg.driver + " + gVisor" : cfg.driver], ["Model", run.activeModel || cfg.model || "?"]];
   $("stats").innerHTML = items.map(([k,v]) => '<div class="stat">'+esc(k)+'<b>'+esc(v)+'</b></div>').join("");
   if (run.status !== "running") {
     const v = $("verdict");

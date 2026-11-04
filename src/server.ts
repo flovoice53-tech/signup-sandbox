@@ -7,7 +7,7 @@ import path from "node:path";
 import { DATA_DIR, decideApproval, executeRun, MAX_RUN_MS, newRunId, type Run, type RunEvent } from "./agent.ts";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { DEMO_URL, demoEmailsLeft, startDemoSites } from "./demo-sites.ts";
-import { cleanupStale, DRIVER, startJanitor } from "./sandbox.ts";
+import { cleanupStale, BROWSER_RUNTIME, DRIVER, startJanitor } from "./sandbox.ts";
 import { MODEL } from "./llm.ts";
 import { UI_HTML } from "./ui.ts";
 import { listMonitors, startMonitors } from "./monitors.ts";
@@ -245,7 +245,7 @@ const server = http.createServer(async (req, res) => {
       }
     }
     if (req.method === "GET" && url.pathname === "/api/config") {
-      return json(res, 200, { targets: TARGETS, driver: DRIVER, model: MODEL, demoUrl: DEMO_URL, featured: featuredRun()?.id ?? null });
+      return json(res, 200, { targets: TARGETS, driver: DRIVER, runtime: BROWSER_RUNTIME || null, model: MODEL, demoUrl: DEMO_URL, featured: featuredRun()?.id ?? null });
     }
     if (url.pathname === "/api/runs" && req.method === "POST") return startRun(req, res);
     if (url.pathname === "/api/runs" && req.method === "GET") {
