@@ -68,7 +68,7 @@ Tick "Human in the loop" on the demo page (or send `"approval": true` when start
 
 `npm run bench` runs every attack page in `src/demo-sites.ts` (`/attacks/<name>`) through a real sandbox, with no model involved, and counts what got out. Each page tries to send data to a canary URL on our own server, so a request that really left the sandbox would be counted there; a control request from outside the sandbox checks that the canary works. The **Fired** column records whether the attack actually attempted egress on that run: a "nothing got out" row only proves containment when the attack fired, so a `fired = no` row is flagged rather than mistaken for a win. Latest run on the Vultr instance (also shown live on the demo page):
 
-**15 attacks · 15 fired · 24 requests blocked · 0 off-site requests allowed · 0 canary hits** (control from outside: 1)
+**19 attacks · 19 fired · 26 requests blocked · 0 off-site requests allowed · 0 canary hits · 0 DNS canary queries** (controls from outside: 1 HTTP, 1 DNS)
 
 | Attack page | Fired | Blocked requests | Got out |
 |---|---|---|---|
@@ -85,10 +85,14 @@ Tick "Human in the loop" on the demo page (or send `"approval": true` when start
 | Link prefetch to the collector | yes | 1 | nothing |
 | `fetch()` of the Vultr metadata service by IP | yes | 2 | nothing |
 | Metadata service through an IPv4-mapped IPv6 address | yes | 1 | nothing |
+| DNS leak: image from a hostname carrying the secret | yes | 1 | nothing |
+| DNS leak: `fetch()` to a hostname carrying the secret | yes | 1 | nothing |
+| DNS leak: `dns-prefetch` and `preconnect` hints to a hostname carrying the secret | yes (page loaded) | 0 | nothing |
+| DNS leak: WebRTC with a STUN server hostname carrying the secret | yes (page loaded) | 0 | nothing |
 | Allowlisted hostname whose DNS points at the metadata service (`169.254.169.254.sslip.io`), which exercises the second layer | yes | 1 | nothing |
-| DNS exfiltration: a secret encoded in a hostname the page resolves (`<secret>.collector.example.net`) | yes | 1 | nothing |
+| Top-level navigation to a hostname carrying the secret (the proxy must refuse it before any DNS lookup) | yes | 1 | nothing |
 
-The **DNS-exfiltration** case: a page encodes a secret in a hostname it asks the browser to resolve (`<secret>.collector.example.net`), trying to leak the secret to the attacker's authoritative name server inside the DNS query itself, before any HTTP connection. The egress proxy checks the allowlist *before* it resolves anything, so an off-allowlist name is never looked up and the secret-bearing query never leaves the sandbox — the request is refused as "host not on the allowlist" (pre-DNS), not "DNS lookup failed".
+**DNS leaks are measured independently, not taken from the proxy's own log.** A page can try to leak data in a DNS lookup itself (`<secret>.attacker.example`), which reaches the attacker's name server before any connection is made. To catch that, `dns.flo-voice1.com` is delegated to our own name server on the VM (`dns-canary/server.mjs`): any lookup of `<token>.dns.flo-voice1.com` made anywhere on the internet ends up there and is counted. The DNS attack pages put each run's token in such a hostname (image, `fetch()`, `dns-prefetch`/`preconnect` hints, a WebRTC STUN server); a control lookup from outside the sandbox must be counted, and was. Nothing from inside the sandbox was. Why: the proxy checks the allowlist before it resolves a name, Chromium hands hostnames to the proxy instead of resolving them, and the browser container sits on an `--internal` Docker network whose resolver does not forward external names. For the two attacks that make no proxied request (DNS hints and WebRTC), "fired" means the attack page loaded; the canary then shows that no lookup got out.
 
 ## How Vultr is used
 
@@ -155,6 +159,8 @@ APP_HOST=sandbox.example.com DEMO_HOST=demo.example.com bash deploy/setup.sh
 # fill in /opt/signup-sandbox/.env, then
 systemctl restart signup-sandbox
 ```
+
+Optional DNS canary for the benchmark: delegate a subdomain to the VM (an `A` record for `ns-canary.<domain>` pointing at the VM, an `NS` record for `dns.<domain>` pointing at `ns-canary.<domain>`), open `53/udp`, put `DNS_ZONE`, `DNS_NS_HOST`, `DNS_BIND` (the VM's public IP) in `/opt/signup-sandbox/dns-canary.env`, install `deploy/dns-canary.service`, and set `DNS_CANARY_ZONE` and `DNS_CANARY_API=http://127.0.0.1:4053` in `.env`.
 
 ## API
 

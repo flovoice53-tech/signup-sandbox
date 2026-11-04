@@ -229,12 +229,12 @@ async function loadBench(){
   const res = await fetch("/api/bench");
   if (!res.ok) return;
   const b = await res.json();
-  const out = (c) => c.offsiteAllowed + c.canaryHits === 0;
+  const out = (c) => c.offsiteAllowed + c.canaryHits + (c.dnsHits || 0) === 0;
   const fired = b.fired != null ? b.fired : b.cases.filter(c => c.fired).length;
-  $("bench").innerHTML = '<h2>Containment benchmark</h2><div class="sum">' + esc(b.attacks) + ' attacks · ' + esc(fired) + ' actually fired · ' + esc(b.blocked) + ' requests blocked · ' + esc(b.offsiteAllowed) + ' got out · canary hits ' + esc(b.canaryHits) + '</div>' +
+  $("bench").innerHTML = '<h2>Containment benchmark</h2><div class="sum">' + esc(b.attacks) + ' attacks · ' + esc(fired) + ' actually fired · ' + esc(b.blocked) + ' requests blocked · ' + esc(b.offsiteAllowed) + ' got out · canary hits ' + esc(b.canaryHits) + (b.dnsHits == null ? '' : ' · DNS canary queries ' + esc(b.dnsHits)) + '</div>' +
     '<table><tr><th>Attack page</th><th>Fired</th><th>Blocked</th><th>Got out</th></tr>' +
-    b.cases.map(c => '<tr><td>' + esc(c.label) + '</td><td class="' + (c.fired ? 'ok">yes' : 'bad">no') + '</td><td>' + esc(c.blocked) + '</td><td class="' + (out(c) ? 'ok">nothing' : 'bad">' + esc(c.offsiteAllowed + c.canaryHits)) + '</td></tr>').join("") + '</table>' +
-    '<div class="m">“Fired” means the attack actually attempted egress this run — a “nothing got out” row only proves containment when the attack fired. Each attack page tries to send data to a canary on our own server, so anything that really left the sandbox would be counted there; a control request from outside the sandbox was counted (' + esc(b.controlHits) + '). Model-free and deterministic (npm run bench), run ' + esc(new Date(b.at).toLocaleString()) + '.</div>';
+    b.cases.map(c => '<tr><td>' + esc(c.label) + '</td><td class="' + (c.fired ? 'ok">yes' : 'bad">no') + '</td><td>' + esc(c.blocked) + '</td><td class="' + (out(c) ? 'ok">nothing' : 'bad">' + esc(c.offsiteAllowed + c.canaryHits + (c.dnsHits || 0))) + '</td></tr>').join("") + '</table>' +
+    '<div class="m">“Fired” means the attack actually attempted egress this run — a “nothing got out” row only proves containment when the attack fired. Each attack page tries to send data to a canary on our own server, so anything that really left the sandbox would be counted there; a control request from outside the sandbox was counted (' + esc(b.controlHits) + ').' + (b.dnsHits == null ? '' : ' DNS leaks are measured the same way: our own name server is authoritative for ' + esc(b.dnsZone) + ' and counts every lookup of a page’s secret hostname that reaches the internet; a control lookup from outside the sandbox was counted (' + esc(b.dnsControlHits) + ').') + ' Model-free and deterministic (npm run bench), run ' + esc(new Date(b.at).toLocaleString()) + '.</div>';
 }
 
 function setBusy(b){ document.querySelectorAll(".target, .judge").forEach(t => t.disabled = b); }
