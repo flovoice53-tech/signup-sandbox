@@ -128,7 +128,8 @@ console.log(`blocked ${dnsExfil.blocked} (${dnsExfil.reasons.join(", ")}) preDns
 
 // Domain fronting, as code that escaped the browser would try it: from inside
 // the browser container, open a tunnel to the allowed demo host and then name
-// a different host inside it (TLS SNI on 443, Host header on 80). The
+// a different host inside it (TLS SNI on 443, Host header on 80, or a Host
+// header inside TLS behind a matching SNI). The
 // orchestrator shares the demo host's IP and web server, so without a check
 // this reaches it; the fronted request goes to the HTTP canary, so a success
 // is counted there. A control tunnel naming the allowed host must work.
@@ -139,7 +140,7 @@ const req=http.request({host:u.hostname,port:u.port,method:"CONNECT",path:proces
 req.on("connect",(res,sock)=>{if(res.statusCode!==200)return out({tunnel:res.statusCode});
 const send=(s)=>{s.write("GET "+process.env.PATH_+" HTTP/1.1\\r\\nHost: "+process.env.INNER+"\\r\\nConnection: close\\r\\n\\r\\n");let d="";
 s.on("data",(c)=>d+=c);s.on("close",()=>out({reached:d?d.split("\\r\\n")[0]:null}));s.on("error",(e)=>out({error:e.code||e.message}))};
-if(process.env.P==="443"){const t=tls.connect({socket:sock,servername:process.env.INNER,rejectUnauthorized:false});t.on("error",(e)=>out({error:e.code||e.message}));t.on("secureConnect",()=>send(t))}else send(sock)});
+if(process.env.P==="443"){const t=tls.connect({socket:sock,servername:process.env.SNI||process.env.INNER,rejectUnauthorized:false});t.on("error",(e)=>out({error:e.code||e.message}));t.on("secureConnect",()=>send(t))}else send(sock)});
 req.on("error",(e)=>out({error:e.message}));req.setTimeout(15000,()=>out({error:"timeout"}));req.end();`;
 if (DRIVER === "docker") {
   process.stdout.write("domain-fronting … ");
@@ -150,13 +151,17 @@ if (DRIVER === "docker") {
     `Domain fronting from code inside the container: a tunnel to the allowed host that names the orchestrator (${orchestratorHost}) inside it`,
     demoHost,
     async (sb, token) => {
-      const probe = async (port: string, inner: string, p: string) => {
-        const { stdout } = await execFileP("docker", ["exec", "-e", `T=${demoHost}`, "-e", `P=${port}`, "-e", `INNER=${inner}`, "-e", `PATH_=${p}`, `${sb.name}-browser`, "node", "-e", FRONT_PROBE], { timeout: 30_000 }).catch((e) => ({ stdout: JSON.stringify({ error: String(e.message).slice(0, 80) }) }));
+      const probe = async (port: string, inner: string, p: string, sni = "") => {
+        const { stdout } = await execFileP("docker", ["exec", "-e", `T=${demoHost}`, "-e", `P=${port}`, "-e", `INNER=${inner}`, "-e", `SNI=${sni}`, "-e", `PATH_=${p}`, `${sb.name}-browser`, "node", "-e", FRONT_PROBE], { timeout: 30_000 }).catch((e) => ({ stdout: JSON.stringify({ error: String(e.message).slice(0, 80) }) }));
         return JSON.parse(stdout.trim().split("\n").pop() || "{}");
       };
       probes.control = await probe("443", demoHost, "/acme");
       probes.sni = await probe("443", orchestratorHost, `/canary/${token}`);
       probes.host = await probe("80", orchestratorHost, `/canary/${token}`);
+      // Classic fronting: the SNI the proxy sees is the allowed host; only the
+      // Host header inside TLS names the orchestrator. The proxy can't read it,
+      // so the web server must refuse a Host that differs from the SNI (421).
+      probes.hostInsideTls = await probe("443", orchestratorHost, `/canary/${token}`, demoHost);
     },
   );
   fronting.layer = "name inside the tunnel";
