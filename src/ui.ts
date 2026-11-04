@@ -41,6 +41,7 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
 .ev.hl{animation:pulse 1.2s ease-in-out 3;border-left-width:6px}#redteam.hl{animation:pulse 1.2s ease-in-out 4}
 .target.red{border-color:#5a2026}.target.red b{color:#ff8a8a}
 #bench{margin-top:24px}#bench h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}#bench .sum{font-size:16px;font-weight:700;margin-bottom:8px}#bench table{width:100%;border-collapse:collapse;font-size:13px}#bench td,#bench th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}#bench th{color:var(--muted);font-weight:600}#bench .ok{color:var(--ok);font-weight:700}#bench .bad{color:var(--bad);font-weight:700}#bench .m{color:var(--muted);font-size:12px;margin-top:6px}
+.want{margin:10px 0 0;padding:12px;background:var(--panel);border:1px solid var(--line);border-radius:8px;font-size:13px;color:var(--muted)}.want b{color:var(--text)}.want .row{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 6px}.want input{flex:1 1 200px;min-width:0;padding:8px 10px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit}.want button{padding:8px 14px;border-radius:6px;border:1px solid var(--line);background:var(--text);color:var(--bg);font:inherit;cursor:pointer}.want .m{font-size:12px}
 #monitors{margin-top:24px}#monitors h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
 .mon{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:10px 12px;background:var(--panel);border:1px solid var(--line);border-radius:8px;margin:6px 0;font-size:13px}
 .mon .nm{font-weight:700;min-width:180px}.mon .st{font-weight:700}.mon .st.passed{color:var(--ok)}.mon .st.failed{color:var(--bad)}.mon .m{color:var(--muted)}
@@ -68,6 +69,9 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
   <div class="panel"><h2>What the sandboxed browser sees</h2><img id="shot" alt="Sandbox browser screenshot"></div>
 </div>
 <div id="monitors"></div>
+<form id="wantit" class="want"><b>Want this on your own signup?</b> Leave your email and your signup page, and I'll set up a monitor and reply.
+<div class="row"><input name="email" type="email" required maxlength="200" placeholder="you@company.com" aria-label="Your email"><input name="url" type="url" required maxlength="500" placeholder="https://yourapp.com/signup" aria-label="Your signup page"><button type="submit">Request a monitor</button></div>
+<span class="m">Your email is only used to reply to you.</span> <span id="wantmsg"></span></form>
 <div id="recent"></div>
 <div id="bench"></div>
 <div class="how"><p><b>Containment.</b> Each run gets its own isolated Docker network, on which the host itself has no address. The browser container runs on gVisor (its own user-space kernel), has no DNS, no capabilities, a read-only filesystem, memory/CPU/process limits and no long-lived secrets (the LLM key and inbox secret stay outside); its only way out is an egress proxy that allows the site under test, checks the name inside every HTTPS tunnel, and refuses private addresses, including the cloud metadata service. The model's actions are checked against the same policy before they run. When the run ends, the browser, the proxy and the network are deleted.</p>
@@ -262,6 +266,16 @@ function setBusy(b){ document.querySelectorAll(".target, .judge").forEach(t => t
   loadRecent(cfg);
   loadBench();
   loadMonitors(cfg);
+  $("wantit").onsubmit = async (ev) => {
+    ev.preventDefault();
+    const f = ev.target, msg = $("wantmsg");
+    msg.textContent = "Sending…";
+    try {
+      const r = await fetch("/api/monitor-request", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: f.email.value, url: f.url.value }) });
+      const d = await r.json().catch(() => ({}));
+      if (r.ok) { msg.textContent = "Thanks! I'll be in touch."; f.reset(); } else msg.textContent = d.error || "Something went wrong.";
+    } catch { msg.textContent = "Something went wrong."; }
+  };
   const existing = new URLSearchParams(location.search).get("run");
   if (existing) watch(existing, cfg);
 })();

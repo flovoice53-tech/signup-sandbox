@@ -1,12 +1,12 @@
 // HTTP API + web UI. Runs are kept in memory and written to DATA_DIR as
 // JSON when they finish, so the history survives a restart.
 import http from "node:http";
-import { readFile, readdir, writeFile } from "node:fs/promises";
+import { appendFile, readFile, readdir, writeFile } from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
 import path from "node:path";
 import { DATA_DIR, decideApproval, executeRun, MAX_RUN_MS, newRunId, type Run, type RunEvent } from "./agent.ts";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { DEMO_URL, demoEmailsLeft, startDemoSites } from "./demo-sites.ts";
+import { DEMO_URL, demoEmailsLeft, sendAlertMail, startDemoSites } from "./demo-sites.ts";
 import { cleanupStale, BROWSER_RUNTIME, DRIVER, startJanitor } from "./sandbox.ts";
 import { MODEL } from "./llm.ts";
 import { UI_HTML } from "./ui.ts";
@@ -104,6 +104,50 @@ function featuredRun() {
   return [...runs.values()]
     .filter((r) => r.compromised && r.status === "passed" && r.redTeamAttempts && r.redTeamStopped === r.redTeamAttempts)
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
+}
+
+// "Want this on your own signup?" requests from the demo page: appended to
+// DATA_DIR/monitor-requests.jsonl and emailed to ALERT_EMAIL.
+const requestsByIp = new Map<string, number[]>();
+let requestsDay = "";
+let requestsToday = 0;
+async function monitorRequest(req: http.IncomingMessage, res: http.ServerResponse) {
+  let body: { email?: unknown; url?: unknown; note?: unknown } = {};
+  try {
+    body = JSON.parse((await readBody(req)) || "{}");
+  } catch {
+    return json(res, 400, { error: "invalid request body" });
+  }
+  const email = String(body.email ?? "").trim().slice(0, 200);
+  const site = String(body.url ?? "").trim().slice(0, 500);
+  const note = String(body.note ?? "").trim().slice(0, 500);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(res, 400, { error: "Enter a valid email." });
+  let host = "";
+  try {
+    const u = new URL(site);
+    if (u.protocol !== "https:" && u.protocol !== "http:") throw new Error();
+    host = u.hostname;
+  } catch {
+    return json(res, 400, { error: "Enter the URL of your signup page." });
+  }
+  const key = rateKey(clientIp(req));
+  const hourAgo = Date.now() - 3600_000;
+  const recent = (requestsByIp.get(key) ?? []).filter((t) => t > hourAgo);
+  const today = new Date().toISOString().slice(0, 10);
+  if (today !== requestsDay) {
+    requestsDay = today;
+    requestsToday = 0;
+  }
+  if (recent.length >= 3 || requestsToday >= 50) return json(res, 429, { error: "Too many requests; try again later." });
+  recent.push(Date.now());
+  requestsByIp.set(key, recent);
+  requestsToday++;
+  await appendFile(path.join(DATA_DIR, "monitor-requests.jsonl"), JSON.stringify({ at: new Date().toISOString(), email, url: site, note }) + "\n");
+  if (process.env.ALERT_EMAIL) {
+    await sendAlertMail(process.env.ALERT_EMAIL, `Monitor request: ${host}`, `${email} asked for a signup monitor on ${site}${note ? `\n\nNote: ${note}` : ""}`)
+      .catch((err) => console.error("monitor request email failed:", (err as Error).message));
+  }
+  return json(res, 201, { ok: true });
 }
 
 const isDemoRun = (run: Run) => run.targetUrl.startsWith(`${DEMO_URL}/`);
@@ -248,6 +292,7 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { targets: TARGETS, driver: DRIVER, runtime: BROWSER_RUNTIME || null, model: MODEL, demoUrl: DEMO_URL, featured: featuredRun()?.id ?? null });
     }
     if (url.pathname === "/api/runs" && req.method === "POST") return startRun(req, res);
+    if (url.pathname === "/api/monitor-request" && req.method === "POST") return monitorRequest(req, res);
     if (url.pathname === "/api/runs" && req.method === "GET") {
       // Only demo runs are listed; operator runs against other sites stay out of the public history.
       const list = [...runs.values()]
