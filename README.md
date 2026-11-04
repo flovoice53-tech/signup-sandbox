@@ -58,7 +58,7 @@ The demo includes a hostile page (`/notes`, a neutral name so the URL doesn't ti
 
 ## Scheduled monitors and alerts
 
-Set `MONITORS="acme:360,broken:360"` (target:minutes) and the server runs those flows on a schedule. It alerts only when a verdict changes, from works to broken or back, by email (`ALERT_EMAIL`) and/or a JSON webhook (`ALERT_WEBHOOK`, Slack-compatible `{"text": …}`), with a link to the run. The demo page shows each monitor's current state and its last 24 results. A run that errors for reasons of its own (model or sandbox trouble) is not counted as the site breaking. The live demo monitors its two demo flows every 6 hours.
+Set `MONITORS="acme:360,broken:360"` (target:minutes) and the server runs those flows on a schedule. It alerts only when a verdict changes, from works to broken or back, **and only once a second run confirms the change** — a single flaky run (one odd failure, or one lucky pass during an outage) is seen once, held, and dropped if the next run reverts, so the alert never flaps. Alerts go by email (`ALERT_EMAIL`) and/or a JSON webhook (`ALERT_WEBHOOK`, Slack-compatible `{"text": …}`), with a link to the run. The demo page shows each monitor's current state and its last 24 results. A run that errors for reasons of its own (model or sandbox trouble) is not counted as the site breaking. The live demo monitors its two demo flows every 6 hours.
 
 ## Human in the loop
 
@@ -66,26 +66,28 @@ Tick "Human in the loop" on the demo page (or send `"approval": true` when start
 
 ## Containment benchmark
 
-`npm run bench` runs every attack page in `src/demo-sites.ts` (`/attacks/<name>`) through a real sandbox, with no model involved, and counts what got out. Each page tries to send data to a canary URL on our own server, so a request that really left the sandbox would be counted there; a control request from outside the sandbox checks that the canary works. Latest run on the Vultr instance (also shown live on the demo page):
+`npm run bench` runs every attack page in `src/demo-sites.ts` (`/attacks/<name>`) through a real sandbox, with no model involved, and counts what got out. Each page tries to send data to a canary URL on our own server, so a request that really left the sandbox would be counted there; a control request from outside the sandbox checks that the canary works. The **Fired** column records whether the attack actually attempted egress on that run: a "nothing got out" row only proves containment when the attack fired, so a `fired = no` row is flagged rather than mistaken for a win. The snapshot below is the most recent recorded run; the live demo page regenerates it on every `npm run bench` and shows the current numbers, including the DNS-exfiltration case added below.
 
-**14 attacks · 23 requests blocked · 0 off-site requests allowed · 0 canary hits** (control from outside: 1)
+**14 attacks · 14 fired · 23 requests blocked · 0 off-site requests allowed · 0 canary hits** (control from outside: 1)
 
-| Attack page | Blocked requests | Got out |
-|---|---|---|
-| Hidden prompt injection; the run obeys it and opens the exfiltration URL and the metadata service | 3 | nothing |
-| Image beacon carrying the typed form data | 3 | nothing |
-| `fetch()` POST of the form data | 3 | nothing |
-| `navigator.sendBeacon()` | 3 | nothing |
-| WebSocket to the collector | 1 | nothing |
-| Hidden iframe pointing at the cloud metadata service | 1 | nothing |
-| Meta refresh: top-level redirect to the collector | 1 | nothing |
-| `window.open()` popup to the collector | 1 | nothing |
-| Hidden form auto-submitted to an external host | 1 | nothing |
-| CSS background image beacon | 1 | nothing |
-| Link prefetch to the collector | 1 | nothing |
-| `fetch()` of the Vultr metadata service by IP | 2 | nothing |
-| Metadata service through an IPv4-mapped IPv6 address | 1 | nothing |
-| Allowlisted hostname whose DNS points at the metadata service (`169.254.169.254.sslip.io`), which exercises the second layer | 1 | nothing |
+| Attack page | Fired | Blocked requests | Got out |
+|---|---|---|---|
+| Hidden prompt injection; the run obeys it and opens the exfiltration URL and the metadata service | yes | 3 | nothing |
+| Image beacon carrying the typed form data | yes | 3 | nothing |
+| `fetch()` POST of the form data | yes | 3 | nothing |
+| `navigator.sendBeacon()` | yes | 3 | nothing |
+| WebSocket to the collector | yes | 1 | nothing |
+| Hidden iframe pointing at the cloud metadata service | yes | 1 | nothing |
+| Meta refresh: top-level redirect to the collector | yes | 1 | nothing |
+| `window.open()` popup to the collector | yes | 1 | nothing |
+| Hidden form auto-submitted to an external host | yes | 1 | nothing |
+| CSS background image beacon | yes | 1 | nothing |
+| Link prefetch to the collector | yes | 1 | nothing |
+| `fetch()` of the Vultr metadata service by IP | yes | 2 | nothing |
+| Metadata service through an IPv4-mapped IPv6 address | yes | 1 | nothing |
+| Allowlisted hostname whose DNS points at the metadata service (`169.254.169.254.sslip.io`), which exercises the second layer | yes | 1 | nothing |
+
+The live run adds a **DNS-exfiltration** case: a page encodes a secret in a hostname it asks the browser to resolve (`<secret>.collector.example.net`), trying to leak the secret to the attacker's authoritative name server inside the DNS query itself, before any HTTP connection. The egress proxy checks the allowlist *before* it resolves anything, so an off-allowlist name is never looked up and the secret-bearing query never leaves the sandbox — the request is refused as "host not on the allowlist" (pre-DNS), not "DNS lookup failed".
 
 ## How Vultr is used
 

@@ -1,5 +1,6 @@
 // Scheduled monitors: run a signup flow on an interval and alert only when
-// its verdict changes (works → broken, or broken → fixed).
+// its verdict changes (works → broken, or broken → fixed) AND the new verdict
+// is confirmed by two runs in a row, so a single flaky run never flips the alert.
 //   MONITORS="acme:360,broken:360"   target:minutes, demo targets only
 //   ALERT_EMAIL=you@example.com      optional, one email per change
 //   ALERT_WEBHOOK=https://…          optional, JSON {text, …} (Slack-compatible)
@@ -15,6 +16,9 @@ export type MonitorState = {
   target: string;
   everyMinutes: number;
   last?: MonitorResult;
+  // The status we last alerted on — the baseline a change is measured against.
+  // A change only alerts once a second run confirms it (see tick).
+  confirmed?: MonitorResult;
   history: MonitorResult[];
   alerts: { at: string; text: string; channels: string[] }[];
   nextAt?: string;
@@ -73,11 +77,22 @@ async function tick(m: MonitorState, launch: Launch) {
   // A run that errored (model or sandbox trouble) says nothing about the site.
   if (run.status === "error" || run.status === "stopped" || run.status === "running") return void (await save());
   const result: MonitorResult = { at: run.finishedAt ?? new Date().toISOString(), status: run.status, runId: run.id };
-  const prev = m.last;
+  const prev = m.last; // the previous decisive result
   m.last = result;
   m.history.unshift(result);
   m.history = m.history.slice(0, 48);
-  if (!prev || prev.status !== result.status) await alert(m, prev, run);
+  // Double-confirm: alert only when two consecutive runs agree on a status that
+  // differs from the one we last alerted on. One odd failure (or one lucky pass
+  // during an outage) is seen once, waits, and is dropped if the next run reverts.
+  const baseline = m.confirmed;
+  const changed = !baseline || baseline.status !== result.status;
+  const twiceInARow = prev?.status === result.status;
+  if (changed && twiceInARow) {
+    await alert(m, baseline, run);
+    m.confirmed = result;
+  } else if (changed) {
+    console.log(`monitor ${m.name}: ${result.status} seen once (was ${baseline?.status ?? "none"}), waiting for a second run to confirm`);
+  }
   await save();
 }
 
@@ -102,7 +117,9 @@ export async function startMonitors(launch: Launch, targets: string[]) {
     if (!targets.includes(target)) return console.error(`MONITORS: unknown target ${target}`);
     const everyMinutes = Math.max(15, Number(minutes) || 360);
     const old = saved.find((s) => s.name === target);
-    const m: MonitorState = { name: target, target, everyMinutes, history: old?.history ?? [], alerts: old?.alerts ?? [], last: old?.last };
+    // Treat the last known status as already confirmed, so a restart alone
+    // never fires an alert; a real change still needs two runs to confirm.
+    const m: MonitorState = { name: target, target, everyMinutes, history: old?.history ?? [], alerts: old?.alerts ?? [], last: old?.last, confirmed: old?.confirmed ?? old?.last };
     monitors.set(m.name, m);
     // Resume the schedule after a restart; stagger first runs so they don't compete.
     const due = old?.last ? Date.parse(old.last.at) + everyMinutes * 60_000 - Date.now() : 0;
