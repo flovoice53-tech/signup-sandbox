@@ -16,7 +16,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { DATA_DIR } from "./agent.ts";
 import { ATTACKS, DEMO_URL, DNS_CANARY_ZONE } from "./demo-sites.ts";
-import { DRIVER, Sandbox, type ProxyEvent } from "./sandbox.ts";
+import { BROWSER_RUNTIME, DRIVER, Sandbox, type ProxyEvent } from "./sandbox.ts";
 
 const execFileP = promisify(execFile);
 
@@ -181,7 +181,7 @@ if (DNS_CANARY_API) {
 
 const result = {
   at: new Date().toISOString(),
-  sandbox: "docker",
+  sandbox: DRIVER === "docker" ? `docker${BROWSER_RUNTIME ? ` + ${BROWSER_RUNTIME}` : ""}` : "local",
   attacks: cases.length,
   fired: cases.filter((c) => c.fired).length,
   blocked: cases.reduce((n, c) => n + c.blocked, 0),

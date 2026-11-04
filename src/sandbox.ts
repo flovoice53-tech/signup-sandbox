@@ -22,6 +22,11 @@ const EGRESS_NETWORK = "sbx-egress";
 
 export type ProxyEvent = { type: "ready" | "allowed" | "blocked"; host?: string; port?: number; method?: string; path?: string; reason?: string; inner?: string; at: string };
 
+// Optional OCI runtime for the browser container, e.g. "runsc" (gVisor): the
+// browser then runs on a user-space kernel, so a renderer exploit that gets
+// code execution in the container still doesn't reach the host kernel.
+export const BROWSER_RUNTIME = process.env.SANDBOX_RUNTIME ?? "";
+
 export const LIMITS = {
   memory: "1g",
   cpus: "1",
@@ -82,6 +87,7 @@ export class Sandbox {
   private stopped = false;
   private exited = false;
   readonly name: string;
+  private proxyAddress = "";
 
   private constructor(runId: string, private onProxyEvent: (e: ProxyEvent) => void) {
     this.name = `sbx-${runId}`;
@@ -111,6 +117,11 @@ export class Sandbox {
       "signup-sandbox-proxy",
     );
     await docker("network", "connect", net, proxyName);
+    // The browser reaches the proxy by IP, so it needs no DNS at all. (Under
+    // gVisor, Docker's embedded resolver isn't reachable from the container.)
+    const { stdout: proxyIp } = await docker("inspect", "-f", `{{(index .NetworkSettings.Networks "${net}").IPAddress}}`, proxyName);
+    if (!/^\d+\.\d+\.\d+\.\d+$/.test(proxyIp.trim())) throw new Error("egress proxy has no address on the run network");
+    this.proxyAddress = proxyIp.trim();
     this.proxy = spawn("docker", ["logs", "-f", proxyName], { stdio: ["ignore", "pipe", "ignore"] });
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("egress proxy did not start")), 20_000);
@@ -127,13 +138,14 @@ export class Sandbox {
       "docker",
       [
         "run", "-i", "--rm", "--name", `${this.name}-browser`, "--label", "sbx=1",
+        ...(BROWSER_RUNTIME ? ["--runtime", BROWSER_RUNTIME] : []),
         "--network", net,
         "--memory", LIMITS.memory, "--memory-swap", LIMITS.memory, "--cpus", LIMITS.cpus,
         "--pids-limit", String(LIMITS.pids),
         "--read-only", "--tmpfs", "/tmp:size=256m", "--shm-size", "256m",
         "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
         "-e", "HOME=/tmp",
-        "-e", `PROXY_URL=http://${proxyName}:3128`,
+        "-e", `PROXY_URL=http://${this.proxyAddress}:3128`,
         "signup-sandbox-browser",
       ],
       { stdio: ["pipe", "pipe", "ignore"] },

@@ -24,9 +24,9 @@ Signup and email verification are the most important flows on most products and 
                         │ JSON commands over stdin/stdout (no inbound network)
   per-run Docker network (--internal: no route out)
   ┌─────────────────────┼───────────────────────────────────────────────┐
-  │  browser container (Chromium + Playwright)                          │
+  │  browser container (Chromium + Playwright) on gVisor (runsc)        │
   │   no capabilities · read-only FS · 1 GB · 1 CPU · 512 processes     │
-  │   no keys, no secrets in its environment                            │
+  │   no keys, no secrets in its environment · no DNS                   │
   │                     │                                               │
   │                     ▼                                               │
   │  egress proxy container ── only the site under test, only public IPs ──► internet
@@ -93,9 +93,11 @@ Tick "Human in the loop" on the demo page (or send `"approval": true` when start
 | Top-level navigation to a hostname carrying the secret (the proxy must refuse it before any DNS lookup) | yes | 1 | nothing |
 | Domain fronting from code inside the container: a tunnel to the allowed host that names the orchestrator inside it (TLS SNI, and Host header on port 80) | yes | 2 | nothing |
 
-**DNS leaks are measured independently, not taken from the proxy's own log.** A page can try to leak data in a DNS lookup itself (`<secret>.attacker.example`), which reaches the attacker's name server before any connection is made. To catch that, `dns.flo-voice1.com` is delegated to our own name server on the VM (`dns-canary/server.mjs`): any lookup of `<token>.dns.flo-voice1.com` made anywhere on the internet ends up there and is counted. The DNS attack pages put each run's token in such a hostname (image, `fetch()`, `dns-prefetch`/`preconnect` hints, a WebRTC STUN server); a control lookup from outside the sandbox must be counted, and was. Nothing from inside the sandbox was. Why: the proxy checks the allowlist before it resolves a name, Chromium hands hostnames to the proxy instead of resolving them, and the browser container sits on an `--internal` Docker network whose resolver does not forward external names. For the two attacks that make no proxied request (DNS hints and WebRTC), "fired" means the attack page loaded; the canary then shows that no lookup got out.
+**DNS leaks are measured independently, not taken from the proxy's own log.** A page can try to leak data in a DNS lookup itself (`<secret>.attacker.example`), which reaches the attacker's name server before any connection is made. To catch that, `dns.flo-voice1.com` is delegated to our own name server on the VM (`dns-canary/server.mjs`): any lookup of `<token>.dns.flo-voice1.com` made anywhere on the internet ends up there and is counted. The DNS attack pages put each run's token in such a hostname (image, `fetch()`, `dns-prefetch`/`preconnect` hints, a WebRTC STUN server); a control lookup from outside the sandbox must be counted, and was. Nothing from inside the sandbox was. Why: the proxy checks the allowlist before it resolves a name, Chromium hands hostnames to the proxy instead of resolving them, and the browser container has no working resolver at all: it reaches the proxy by IP, and under gVisor a lookup inside it fails (`EAI_AGAIN`). For the two attacks that make no proxied request (DNS hints and WebRTC), "fired" means the attack page loaded; the canary then shows that no lookup got out.
 
 **Domain fronting.** An HTTPS tunnel names its host twice: once in the proxy's `CONNECT` line, and again inside the tunnel (the TLS SNI, or the `Host` header for `ws://`). Code that escaped the browser could open a tunnel to the allowed host and name a different one inside it, reaching any other site behind the same IP or CDN. Here that includes the orchestrator itself, which shares the demo sites' web server: before the fix, a raw TLS client allowed only to the demo host got `200 OK` from the orchestrator's API. The proxy now reads the first bytes in the tunnel and opens it only if the name inside matches the allowed host. The bench tests this from inside the browser container with `docker exec`: the fronted requests go to the HTTP canary and are cut off, and a control tunnel that names the allowed host still works.
+
+**The browser runs on gVisor.** Chromium's own sandbox is off inside the container (Playwright's default in containers), so the container is the boundary. Under gVisor (`SANDBOX_RUNTIME=runsc`) the browser container runs on a user-space kernel: inside it, the browser sees kernel `4.19.0-gvisor`, not the host's. A renderer exploit that gets code execution in the container therefore still talks to gVisor rather than the host kernel, on top of no capabilities, a read-only filesystem, no secrets and an egress proxy as its only way out. The benchmark and the agent runs above were measured on gVisor.
 
 ## How Vultr is used
 
@@ -162,6 +164,8 @@ APP_HOST=sandbox.example.com DEMO_HOST=demo.example.com bash deploy/setup.sh
 # fill in /opt/signup-sandbox/.env, then
 systemctl restart signup-sandbox
 ```
+
+Recommended: run the browser on gVisor. Install `runsc` from gvisor.dev's apt repository, run `runsc install` and restart Docker, then set `SANDBOX_RUNTIME=runsc` in `.env`. Left empty, the browser uses Docker's default runtime (runc).
 
 Optional DNS canary for the benchmark: delegate a subdomain to the VM (an `A` record for `ns-canary.<domain>` pointing at the VM, an `NS` record for `dns.<domain>` pointing at `ns-canary.<domain>`), open `53/udp`, put `DNS_ZONE`, `DNS_NS_HOST`, `DNS_BIND` (the VM's public IP) in `/opt/signup-sandbox/dns-canary.env`, install `deploy/dns-canary.service`, and set `DNS_CANARY_ZONE` and `DNS_CANARY_API=http://127.0.0.1:4053` in `.env`.
 
