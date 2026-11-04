@@ -215,7 +215,7 @@ async function loadMonitors(cfg){
   if (!res.ok) return;
   const list = await res.json();
   if (!list.length) return;
-  const name = (m) => (cfg.targets[m.target] && cfg.targets[m.target].label) || m.target;
+  const name = (m) => m.url ? m.name + " (real product)" : (cfg.targets[m.target] && cfg.targets[m.target].label) || m.target;
   $("monitors").innerHTML = '<h2>Scheduled monitors · alert only when a verdict changes</h2>' + list.map(m =>
     '<div class="mon"><span class="nm">' + esc(name(m)) + '</span>' +
     '<span class="st ' + esc(m.last ? m.last.status : "") + '">' + esc(m.last ? (m.last.status === "passed" ? "works" : "broken") : "waiting for first run") + '</span>' +

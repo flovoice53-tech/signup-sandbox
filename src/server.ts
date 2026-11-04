@@ -301,7 +301,8 @@ startJanitor(MAX_RUN_MS + 2 * 60_000, (name) => runs.get(name.replace(/^sbx-/, "
 await loadHistory();
 startDemoSites();
 await startMonitors((target, monitor) => {
-  const targetUrl = `${DEMO_URL}/${target === "trap" ? "notes" : target}`;
+  // A full URL comes from MONITOR_URLS, which only the operator sets.
+  const targetUrl = /^https?:\/\//.test(target) ? target : `${DEMO_URL}/${target === "trap" ? "notes" : target}`;
   const busy = capacityError(targetUrl);
   return busy ? { error: busy } : launch(targetUrl, { monitor });
 }, Object.keys(TARGETS).filter((t) => t !== "compromised"));

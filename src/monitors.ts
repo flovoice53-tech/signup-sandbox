@@ -1,7 +1,9 @@
 // Scheduled monitors: run a signup flow on an interval and alert only when
 // its verdict changes (works → broken, or broken → fixed) AND the new verdict
 // is confirmed by two runs in a row, so a single flaky run never flips the alert.
-//   MONITORS="acme:360,broken:360"   target:minutes, demo targets only
+//   MONITORS="acme:360,broken:360"   target:minutes, demo targets
+//   MONITOR_URLS="SMS Send=https://sms.example.com/register@360"   name=url@minutes,
+//                                    operator-chosen real signups (your own sites)
 //   ALERT_EMAIL=you@example.com      optional, one email per change
 //   ALERT_WEBHOOK=https://…          optional, JSON {text, …} (Slack-compatible)
 // State survives restarts in DATA_DIR/monitors.json.
@@ -15,6 +17,8 @@ export type MonitorState = {
   name: string;
   target: string;
   everyMinutes: number;
+  // Set for a real site from MONITOR_URLS (target is then the URL itself).
+  url?: string;
   last?: MonitorResult;
   // The status we last alerted on — the baseline a change is measured against.
   // A change only alerts once a second run confirms it (see tick).
@@ -132,21 +136,31 @@ function schedule(m: MonitorState, launch: Launch, inMs: number) {
 
 export async function startMonitors(launch: Launch, targets: string[]) {
   const spec = (process.env.MONITORS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  if (!spec.length) return;
+  const urlSpec = (process.env.MONITOR_URLS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (!spec.length && !urlSpec.length) return;
   let saved: MonitorState[] = [];
   try {
     saved = JSON.parse(await readFile(FILE, "utf8"));
   } catch {
     // first start
   }
-  spec.forEach((entry, i) => {
+  const entries: { name: string; target: string; minutes: string; url?: string }[] = [];
+  for (const entry of spec) {
     const [target, minutes] = entry.split(":");
-    if (!targets.includes(target)) return console.error(`MONITORS: unknown target ${target}`);
+    if (!targets.includes(target)) console.error(`MONITORS: unknown target ${target}`);
+    else entries.push({ name: target, target, minutes });
+  }
+  for (const entry of urlSpec) {
+    const m = /^([^=]+)=(https?:\/\/[^@\s]+)(?:@(\d+))?$/.exec(entry);
+    if (!m) console.error(`MONITOR_URLS: can't read ${entry}`);
+    else entries.push({ name: m[1].trim(), target: m[2], minutes: m[3] ?? "", url: m[2] });
+  }
+  entries.forEach(({ name, target, minutes, url }, i) => {
     const everyMinutes = Math.max(15, Number(minutes) || 360);
-    const old = saved.find((s) => s.name === target);
+    const old = saved.find((s) => s.name === name);
     // Treat the last known status as already confirmed, so a restart alone
     // never fires an alert; a real change still needs two runs to confirm.
-    const m: MonitorState = { name: target, target, everyMinutes, history: old?.history ?? [], alerts: old?.alerts ?? [], last: old?.last, confirmed: old?.confirmed ?? old?.last, errorsInARow: old?.errorsInARow ?? 0, unhealthy: old?.unhealthy ?? false };
+    const m: MonitorState = { name, target, url, everyMinutes, history: old?.history ?? [], alerts: old?.alerts ?? [], last: old?.last, confirmed: old?.confirmed ?? old?.last, errorsInARow: old?.errorsInARow ?? 0, unhealthy: old?.unhealthy ?? false };
     monitors.set(m.name, m);
     // Resume the schedule after a restart; stagger first runs so they don't compete.
     const due = old?.last ? Date.parse(old.last.at) + everyMinutes * 60_000 - Date.now() : 0;
