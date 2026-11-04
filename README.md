@@ -66,9 +66,9 @@ Tick "Human in the loop" on the demo page (or send `"approval": true` when start
 
 ## Containment benchmark
 
-`npm run bench` runs every attack page in `src/demo-sites.ts` (`/attacks/<name>`) through a real sandbox, with no model involved, and counts what got out. Each page tries to send data to a canary URL on our own server, so a request that really left the sandbox would be counted there; a control request from outside the sandbox checks that the canary works. The **Fired** column records whether the attack actually attempted egress on that run: a "nothing got out" row only proves containment when the attack fired, so a `fired = no` row is flagged rather than mistaken for a win. The snapshot below is the most recent recorded run; the live demo page regenerates it on every `npm run bench` and shows the current numbers, including the DNS-exfiltration case added below.
+`npm run bench` runs every attack page in `src/demo-sites.ts` (`/attacks/<name>`) through a real sandbox, with no model involved, and counts what got out. Each page tries to send data to a canary URL on our own server, so a request that really left the sandbox would be counted there; a control request from outside the sandbox checks that the canary works. The **Fired** column records whether the attack actually attempted egress on that run: a "nothing got out" row only proves containment when the attack fired, so a `fired = no` row is flagged rather than mistaken for a win. Latest run on the Vultr instance (also shown live on the demo page):
 
-**14 attacks · 14 fired · 23 requests blocked · 0 off-site requests allowed · 0 canary hits** (control from outside: 1)
+**15 attacks · 15 fired · 24 requests blocked · 0 off-site requests allowed · 0 canary hits** (control from outside: 1)
 
 | Attack page | Fired | Blocked requests | Got out |
 |---|---|---|---|
@@ -86,8 +86,9 @@ Tick "Human in the loop" on the demo page (or send `"approval": true` when start
 | `fetch()` of the Vultr metadata service by IP | yes | 2 | nothing |
 | Metadata service through an IPv4-mapped IPv6 address | yes | 1 | nothing |
 | Allowlisted hostname whose DNS points at the metadata service (`169.254.169.254.sslip.io`), which exercises the second layer | yes | 1 | nothing |
+| DNS exfiltration: a secret encoded in a hostname the page resolves (`<secret>.collector.example.net`) | yes | 1 | nothing |
 
-The live run adds a **DNS-exfiltration** case: a page encodes a secret in a hostname it asks the browser to resolve (`<secret>.collector.example.net`), trying to leak the secret to the attacker's authoritative name server inside the DNS query itself, before any HTTP connection. The egress proxy checks the allowlist *before* it resolves anything, so an off-allowlist name is never looked up and the secret-bearing query never leaves the sandbox — the request is refused as "host not on the allowlist" (pre-DNS), not "DNS lookup failed".
+The **DNS-exfiltration** case: a page encodes a secret in a hostname it asks the browser to resolve (`<secret>.collector.example.net`), trying to leak the secret to the attacker's authoritative name server inside the DNS query itself, before any HTTP connection. The egress proxy checks the allowlist *before* it resolves anything, so an off-allowlist name is never looked up and the secret-bearing query never leaves the sandbox — the request is refused as "host not on the allowlist" (pre-DNS), not "DNS lookup failed".
 
 ## How Vultr is used
 
