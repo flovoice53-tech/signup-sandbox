@@ -107,7 +107,7 @@ function renderStats(run, cfg){
     const ck = $("checks"), c = run.checks;
     if (c) {
       const item = (ok, text) => '<b><span class="' + (ok ? "y" : "n") + '">' + (ok ? "✓" : "✗") + '</span> ' + esc(text) + '</b>';
-      ck.innerHTML = "Independent checks: " + item(c.email, "verification email arrived") +
+      ck.innerHTML = "Independent checks: " + (c.email === null ? '<b>– no email step on this site</b>' : item(c.email, "verification email arrived")) +
         (c.site === null ? "" : item(c.site, "site confirms the account")) +
         (c.vision === "unavailable" ? '<b><span class="n">?</span> vision check unavailable (image not processed)</b>' : c.vision ? item(c.vision.verified, "vision model sees a signed-in page") : "");
       ck.style.display = "block";

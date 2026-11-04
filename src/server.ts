@@ -113,7 +113,7 @@ function json(res: http.ServerResponse, status: number, body: unknown) {
 }
 
 async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
-  let body: { target?: string; url?: string; token?: string; approval?: boolean } = {};
+  let body: { target?: string; url?: string; token?: string; approval?: boolean; noEmail?: boolean } = {};
   try {
     body = JSON.parse((await readBody(req)) || "{}");
   } catch {
@@ -122,6 +122,7 @@ async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
 
   let targetUrl: string;
   let compromised = false;
+  let emailStep = true;
   if (body.target && TARGETS[body.target]) {
     compromised = body.target === "compromised";
     targetUrl = `${DEMO_URL}/${compromised || body.target === "trap" ? "notes" : body.target}`;
@@ -131,6 +132,8 @@ async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
       const u = new URL(body.url);
       if (u.protocol !== "https:" && u.protocol !== "http:") throw new Error();
       targetUrl = u.toString();
+      // For a site whose signup has no email verification step.
+      emailStep = body.noEmail !== true;
     } catch {
       return json(res, 400, { error: "invalid url" });
     }
@@ -155,7 +158,7 @@ async function startRun(req: http.IncomingMessage, res: http.ServerResponse) {
   recentByIp.set(key, recent);
   runsToday++;
 
-  const { run } = launch(targetUrl, { compromised, approval: body.approval === true && !compromised });
+  const { run } = launch(targetUrl, { compromised, emailStep, approval: body.approval === true && !compromised });
   // Only whoever started the run can approve its actions.
   const approvalToken = run.approval ? randomBytes(16).toString("hex") : undefined;
   if (approvalToken) approvalTokens.set(run.id, approvalToken);
@@ -173,11 +176,12 @@ function capacityError(targetUrl: string, approval = false) {
   return null;
 }
 
-function launch(targetUrl: string, opts: { compromised?: boolean; approval?: boolean; monitor?: string }) {
+function launch(targetUrl: string, opts: { compromised?: boolean; emailStep?: boolean; approval?: boolean; monitor?: string }) {
   const run: Run = {
     id: newRunId(),
     targetUrl,
     compromised: !!opts.compromised,
+    emailStep: opts.emailStep !== false,
     status: "running",
     startedAt: new Date().toISOString(),
     steps: 0,

@@ -101,6 +101,10 @@ Tick "Human in the loop" on the demo page (or send `"approval": true` when start
 
 **The browser runs on gVisor.** Chromium's own sandbox is off inside the container (Playwright's default in containers), so the container is the boundary. Under gVisor (`SANDBOX_RUNTIME=runsc`) the browser container runs on a user-space kernel: inside it, the browser sees kernel `4.19.0-gvisor`, not the host's. A renderer exploit that gets code execution in the container therefore still talks to gVisor rather than the host kernel, on top of no capabilities, a read-only filesystem, no secrets and an egress proxy as its only way out. The benchmark and the latest demo runs were measured on gVisor.
 
+## On a real product
+
+Beyond the demo sites, the agent was pointed at a live product by the same author: the signup of [SMS Send](https://sms.flo-voice1.com/register), a separate outbound-SMS service. It filled in the form with a throwaway receivemail.dev address, submitted it and reached the signed-in dashboard in 4 steps; the vision check confirmed the signed-in page ([run 2fcb5fa65d93](https://sandbox.flo-voice1.com/?run=2fcb5fa65d93)). SMS Send has no email verification step, so that run used the operator-only `noEmail` option: "done" then needs no email, and the vision check becomes mandatory (if it is unavailable, the run ends as an error instead of passing). Custom URLs need the operator's `RUN_TOKEN`, so the public demo can't be pointed at other people's sites.
+
 ## How Vultr is used
 
 - **Vultr Cloud Compute** (`vc2-2c-4gb`, Frankfurt, Ubuntu 24.04) runs the orchestrator, the web app, Caddy for HTTPS, and every sandbox (Docker).
@@ -174,6 +178,7 @@ Optional DNS canary for the benchmark: delegate a subdomain to the VM (an `A` re
 ## API
 
 - `POST /api/runs` `{"target": "acme" | "broken" | "trap" | "compromised", "approval"?: true}` (`trap` runs the hostile `/notes` page) → `{"id", "approvalToken"?}`
+- `POST /api/runs` `{"url", "token", "noEmail"?: true}` → operator-only run against any URL (`token` = `RUN_TOKEN`; `noEmail` for signups without an email verification step)
 - `POST /api/runs/:id/approve` `{"token", "approve": true | false}` → answers a pending human-approval step
 - `GET /api/bench` → latest containment benchmark
 - `GET /api/runs/:id` → run with all events
