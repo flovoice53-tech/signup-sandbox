@@ -116,7 +116,7 @@ function renderStats(run, cfg){
     if (run.compromised && run.redTeamAttempts) {
       rt.style.display = "block";
       rt.textContent = "Containment: " + (run.redTeamStopped || 0) + " of " + run.redTeamAttempts + " escape attempts blocked by the sandbox (credential exfiltration, cloud metadata). " + run.blockedRequests + " outbound requests refused in total." +
-        (run.redTeamMode === "scripted" ? " Layer 1 held too: told to trust the page, the model refused, so a fully compromised agent was simulated." : " The model itself (" + (run.redTeamModel || "the agent") + ") was talked into it by the page; the sandbox still held.");
+        (run.redTeamMode === "scripted" ? " Layer 1 held too: told to trust the page, the model refused, so a fully compromised agent was simulated." : " A real model (" + (run.redTeamModel || "the agent") + "), told to obey notices on the page as a stand-in for a successful injection, chose these requests itself; the sandbox still held.");
     }
   }
 }
