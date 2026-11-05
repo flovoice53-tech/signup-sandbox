@@ -2,6 +2,10 @@
 
 **Live demo: https://sandbox.flo-voice1.com** · built for the Vultr "Agent Rush" hackathon, challenge 1: Blast Radius Zero
 
+> **21 attack pages, 21 fired, 0 escaped** ([benchmark](#containment-benchmark), counted by our own HTTP and DNS canaries outside the sandbox). On the live demo, click **"Watch the containment moment"**: a real model told to obey a hostile page tries to leak the password and read 169.254.169.254, and the sandbox blocks it.
+>
+> **Built on Vultr:** Vultr Cloud Compute runs the orchestrator and every per-run sandbox (gVisor); Vultr Serverless Inference makes every agent decision (glm-5.3), the vision check of the final screen, and plays the red-team model (minimax-m3.1-flash). [Details](#how-vultr-is-used).
+
 An AI agent that tests a website's signup flow end to end, the way a new user would: it fills in the form, confirms the email address with a real inbox, and tells you whether the flow works and, if not, exactly where it breaks.
 
 Every browser action runs inside a disposable sandbox on Vultr that can only reach the site under test. Pages are untrusted input, so the agent is built to survive hostile ones: prompt injection, scripts that try to exfiltrate data, and attempts to read the cloud metadata service.
