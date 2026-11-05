@@ -14,6 +14,8 @@ Signup and email verification are the most important flows on most products and 
 
 ## How it works
 
+![Architecture: the brain stays outside, the browser stays in a box](docs/architecture.png)
+
 ```
                       orchestrator (Vultr VM, outside the sandbox)
   ┌─────────────────────────────────────────────────────────────────────┐
@@ -22,14 +24,15 @@ Signup and email verification are the most important flows on most products and 
   │                     │  test inbox: receivemail.dev (secret stays here)│
   └─────────────────────┼───────────────────────────────────────────────┘
                         │ JSON commands over stdin/stdout (no inbound network)
-  per-run Docker network (--internal: no route out)
+  per-run Docker network (--internal, isolated gateway: no route out, host not on it)
   ┌─────────────────────┼───────────────────────────────────────────────┐
   │  browser container (Chromium + Playwright) on gVisor (runsc)        │
   │   no capabilities · read-only FS · 1 GB · 1 CPU · 512 processes     │
   │   no keys, no secrets in its environment · no DNS                   │
   │                     │                                               │
   │                     ▼                                               │
-  │  egress proxy container ── only the site under test, only public IPs ──► internet
+  │  egress proxy container: only the site under test, only public IPs, │
+  │  name inside each HTTPS tunnel checked ───────────────────────────────► internet
   └─────────────────────────────────────────────────────────────────────┘
         deleted after every run: browser, proxy and network
 ```
