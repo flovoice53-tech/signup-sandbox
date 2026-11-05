@@ -46,7 +46,7 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
 .mon{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:10px 12px;background:var(--panel);border:1px solid var(--line);border-radius:8px;margin:6px 0;font-size:13px}
 .mon .nm{font-weight:700;min-width:180px}.mon .st{font-weight:700}.mon .st.passed{color:var(--ok)}.mon .st.failed{color:var(--bad)}.mon .m{color:var(--muted)}
 .dots{display:flex;gap:3px}.dots i{display:block;width:9px;height:18px;border-radius:2px;background:var(--line)}.dots i.passed{background:var(--ok)}.dots i.failed{background:var(--bad)}
-.alert{font-size:12px;color:var(--muted);margin:2px 0 0 4px}
+.alert{font-size:12px;color:var(--muted);margin:2px 0 0 4px}.mon a{color:var(--accent);text-decoration:none;margin-left:auto}.mon a:hover{text-decoration:underline}
 #recent{margin-top:20px}#recent h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 8px}
 .run{display:flex;gap:10px;align-items:center;padding:7px 10px;background:var(--panel);border:1px solid var(--line);border-radius:8px;margin:5px 0;cursor:pointer;font-size:13px;color:inherit;width:100%;text-align:left;font-family:inherit}
 .run:hover{border-color:var(--accent)}.run .st{font-weight:600;min-width:60px}.run .st.passed{color:var(--ok)}.run .st.failed{color:var(--warn)}.run .st.error{color:var(--bad)}.run .st.stopped{color:var(--muted)}.run .st.running{color:var(--accent)}.run .m{color:var(--muted)}
@@ -224,7 +224,8 @@ async function loadMonitors(cfg){
     '<div class="mon"><span class="nm">' + esc(name(m)) + '</span>' +
     '<span class="st ' + esc(m.last ? m.last.status : "") + '">' + esc(m.last ? (m.last.status === "passed" ? "works" : "broken") : "waiting for first run") + '</span>' +
     '<span class="dots">' + m.history.slice(0, 24).reverse().map(h => '<i class="' + esc(h.status) + '" title="' + esc(new Date(h.at).toLocaleString() + ": " + h.status) + '"></i>').join("") + '</span>' +
-    '<span class="m">every ' + esc(m.everyMinutes) + ' min' + (m.nextAt ? ' · next ' + esc(new Date(m.nextAt).toLocaleTimeString()) : '') + '</span></div>' +
+    '<span class="m">every ' + esc(m.everyMinutes) + ' min' + (m.nextAt ? ' · next ' + esc(new Date(m.nextAt).toLocaleTimeString()) : '') + '</span>' +
+    (m.last ? '<a class="m" href="/?run=' + encodeURIComponent(m.last.runId) + '">last run ›</a>' : '') + '</div>' +
     m.alerts.slice(0, 2).map(a => '<div class="alert">⚑ ' + esc(new Date(a.at).toLocaleString()) + ' · ' + esc(a.text.split(". ")[0]) + (a.channels.length ? ' · sent by ' + esc(a.channels.join(" + ")) : '') + '</div>').join("")
   ).join("");
 }

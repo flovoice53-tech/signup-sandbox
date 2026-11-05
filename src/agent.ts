@@ -176,6 +176,18 @@ export async function executeRun(run: Run, emit: (e: RunEvent) => void) {
     const dir = path.join(DATA_DIR, run.id);
     await mkdir(dir, { recursive: true });
     const allowedHosts = [new URL(run.targetUrl).hostname];
+    // Runs are public. On a real site a URL's query can carry a one-time token
+    // (a verification link that loads a page directly), so only its path is logged.
+    const realSite = !allowedHosts.includes(new URL(DEMO_URL).hostname);
+    const shownUrl = (u: string) => {
+      if (!realSite) return u;
+      try {
+        const x = new URL(u);
+        return x.origin + x.pathname + (x.search ? "?…" : "");
+      } catch {
+        return u;
+      }
+    };
 
     const box = await createMailbox();
     const identity: Record<string, string> = {
@@ -255,7 +267,7 @@ export async function executeRun(run: Run, emit: (e: RunEvent) => void) {
       const obs = await sandbox.send<Observation>("observe");
       const shot = `step-${step}.jpg`;
       await writeFile(path.join(dir, shot), Buffer.from(obs.screenshot, "base64"));
-      say("observe", `${obs.title || "(no title)"} — ${obs.url}`, { step, screenshot: shot });
+      say("observe", `${obs.title || "(no title)"} — ${shownUrl(obs.url)}`, { step, screenshot: shot });
 
       const compromisedPrompt = run.redTeamMode === "model" && !redTeamPromptOff && (run.redTeamAttempts ?? 0) < MAX_RED_TEAM_ATTEMPTS;
       run.activeModel = compromisedPrompt ? RED_TEAM_MODEL : MODEL;
