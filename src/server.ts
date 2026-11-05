@@ -107,10 +107,13 @@ function featuredRun() {
 }
 
 // "Want this on your own signup?" requests from the demo page: appended to
-// DATA_DIR/monitor-requests.jsonl and emailed to ALERT_EMAIL.
+// DATA_DIR/monitor-requests.jsonl; the first few each day are also emailed to
+// ALERT_EMAIL, so a flood can't eat into the operator's mail budget.
 const requestsByIp = new Map<string, number[]>();
 let requestsDay = "";
 let requestsToday = 0;
+const REQUESTS_PER_DAY = 500;
+const REQUEST_EMAILS_PER_DAY = 10;
 async function monitorRequest(req: http.IncomingMessage, res: http.ServerResponse) {
   let body: { email?: unknown; url?: unknown; note?: unknown } = {};
   try {
@@ -138,12 +141,12 @@ async function monitorRequest(req: http.IncomingMessage, res: http.ServerRespons
     requestsDay = today;
     requestsToday = 0;
   }
-  if (recent.length >= 3 || requestsToday >= 50) return json(res, 429, { error: "Too many requests; try again later." });
+  if (recent.length >= 3 || requestsToday >= REQUESTS_PER_DAY) return json(res, 429, { error: "Too many requests; try again later." });
   recent.push(Date.now());
   requestsByIp.set(key, recent);
   requestsToday++;
   await appendFile(path.join(DATA_DIR, "monitor-requests.jsonl"), JSON.stringify({ at: new Date().toISOString(), email, url: site, note }) + "\n");
-  if (process.env.ALERT_EMAIL) {
+  if (process.env.ALERT_EMAIL && requestsToday <= REQUEST_EMAILS_PER_DAY) {
     await sendAlertMail(process.env.ALERT_EMAIL, `Monitor request: ${host}`, `${email} asked for a signup monitor on ${site}${note ? `\n\nNote: ${note}` : ""}`)
       .catch((err) => console.error("monitor request email failed:", (err as Error).message));
   }

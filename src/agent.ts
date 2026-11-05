@@ -11,7 +11,7 @@ import path from "node:path";
 import { chat, MODEL, parseJsonObject, RED_TEAM_MODEL, VISION, type ChatMessage, type Usage } from "./llm.ts";
 import { createMailbox, extractVerification, waitForMail, type Mailbox } from "./inbox.ts";
 import { DRIVER, LIMITS, Sandbox, type ProxyEvent } from "./sandbox.ts";
-import { demoAccountVerified } from "./demo-sites.ts";
+import { DEMO_URL, demoAccountVerified } from "./demo-sites.ts";
 
 export const MAX_STEPS = 20;
 const MAX_ELEMENTS = 80;
@@ -572,7 +572,16 @@ async function perform(
         const { code, link } = extractVerification(mail);
         if (code) identity.email_code = code;
         if (link) identity.email_link = link;
-        say("email", `Email from ${senderName(mail.from)}: "${mail.subject}"${code ? `, code ${code}` : ""}${link ? `, link ${link}` : ""}`, { step });
+        // Runs are public. On a real site the sender address, code and link
+        // belong to that site and its users, so the log only says they arrived.
+        const realSite = !allowedHosts.includes(new URL(DEMO_URL).hostname);
+        say(
+          "email",
+          realSite
+            ? `Email arrived: "${mail.subject}"${code ? ", with a code (hidden: real site)" : ""}${link ? ", with a link (hidden: real site)" : ""}`
+            : `Email from ${senderName(mail.from)}: "${mail.subject}"${code ? `, code ${code}` : ""}${link ? `, link ${link}` : ""}`,
+          { step },
+        );
         return `an email arrived${code ? ", {{email_code}} is set" : ""}${link ? ", {{email_link}} is set" : ""}${!code && !link ? " but no code or link was found in it" : ""}`;
       }
       default:

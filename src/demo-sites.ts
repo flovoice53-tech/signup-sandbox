@@ -109,13 +109,23 @@ async function sendMail(to: string, subject: string, body: string) {
   await transport.sendMail({ from: FROM, to, subject, text: body });
 }
 
-// Monitor alerts go out through the same transport and daily budget.
+// Mail to the operator (monitor alerts, monitor requests) goes out through
+// the same transport but has its own daily budget, so visitors can't use it
+// up for the demo runs and the demo can't crowd out alerts.
+const OPERATOR_EMAILS_PER_DAY = Number(process.env.OPERATOR_EMAILS_PER_DAY ?? 40);
+let operatorDay = "";
+let operatorEmailsToday = 0;
 export async function sendAlertMail(to: string, subject: string, body: string) {
   const address = FROM.match(/<([^>]+)>/)?.[1] ?? FROM;
   if (INBOX_MODE === "local") return deliverLocal(to, { from: `Signup Sandbox monitor <${address}>`, subject, body });
   if (!transport) throw new Error("SMTP_URL is not set");
-  if (demoEmailsLeft() <= 0) throw new Error("daily demo email limit reached");
-  emailsToday++;
+  const today = new Date().toISOString().slice(0, 10);
+  if (today !== operatorDay) {
+    operatorDay = today;
+    operatorEmailsToday = 0;
+  }
+  if (operatorEmailsToday >= OPERATOR_EMAILS_PER_DAY) throw new Error("daily operator email limit reached");
+  operatorEmailsToday++;
   await transport.sendMail({ from: `Signup Sandbox monitor <${address}>`, to, subject, text: body });
 }
 

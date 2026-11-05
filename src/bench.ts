@@ -191,12 +191,13 @@ if (DRIVER === "docker") {
     async (sb) => {
       const inspect = async (...a: string[]) => (await execFileP("docker", a)).stdout.trim();
       const subnet = await inspect("network", "inspect", "-f", "{{range .IPAM.Config}}{{.Subnet}}{{end}}", sb.name);
-      const proxyIp = await inspect("inspect", "-f", `{{(index .NetworkSettings.Networks "${sb.name}").IPAddress}}`, `${sb.name}-proxy`);
       const egressGw = await inspect("network", "inspect", "-f", "{{range .IPAM.Config}}{{.Gateway}}{{end}}", "sbx-egress").catch(() => "");
       const publicIp = new URL(CANARY_URL).hostname;
       const resolved = await dns.lookup(publicIp).then((r) => r.address).catch(() => "");
       const first = subnet.split("/")[0].split(".").slice(0, 3).join(".") + ".1";
-      tried = [...new Set([first, "172.17.0.1", egressGw, resolved].filter((h) => h && h !== proxyIp))];
+      // .1 is where the host used to answer as the gateway; in isolated mode the
+      // proxy may hold it, which only listens on its own port (3128), not these.
+      tried = [...new Set([first, "172.17.0.1", egressGw, resolved].filter(Boolean))];
       const { stdout } = await execFileP("docker", ["exec", "-e", `H=${tried.join(",")}`, `${sb.name}-browser`, "node", "-e", HOST_PROBE], { timeout: 60_000 });
       open = (JSON.parse(stdout.trim().split("\n").pop() || "{}") as { open?: string[] }).open ?? [];
     },
