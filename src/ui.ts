@@ -36,6 +36,7 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
 .judge{display:block;width:100%;margin:12px 0 4px;padding:16px 18px;border-radius:12px;border:1px solid var(--bad);background:#2a1416;color:var(--text);font:inherit;text-align:left;cursor:pointer}
 .judge b{font-size:18px;color:#ff8a8a}.judge span{display:block;color:var(--muted);font-size:13px;margin-top:4px}.judge:hover{background:#3a1a1d}.judge:disabled{opacity:.5;cursor:wait}
 #checks{display:none;margin:-4px 0 14px;font-size:14px;color:var(--muted)}#checks b{color:var(--text);font-weight:600;margin-right:14px}#checks .y{color:var(--ok)}#checks .n{color:var(--bad)}
+#evidence{display:none;margin:-6px 0 14px;font-size:13px}#evidence a{color:var(--muted)}
 #replaynote{display:none;color:var(--warn);font-size:13px;margin:6px 0 10px}
 @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(255,92,92,0)}50%{box-shadow:0 0 0 4px rgba(255,92,92,.55)}}
 .ev.hl{animation:pulse 1.2s ease-in-out 3;border-left-width:6px}#redteam.hl{animation:pulse 1.2s ease-in-out 4}
@@ -62,6 +63,7 @@ code{background:#202636;padding:1px 5px;border-radius:4px}
 <div id="redteam"></div>
 <div id="verdict"></div>
 <div id="checks"></div>
+<div id="evidence"></div>
 <div class="stats" id="stats"></div>
 <div class="contain" id="contain"></div>
 <div class="grid">
@@ -116,6 +118,9 @@ function renderStats(run, cfg){
         (c.vision === "unavailable" ? '<b><span class="n">?</span> vision check unavailable (image not processed)</b>' : c.vision ? item(c.vision.verified, "vision model sees a signed-in page") : "");
       ck.style.display = "block";
     } else ck.style.display = "none";
+    const ev = $("evidence");
+    ev.innerHTML = '<a href="/api/runs/' + esc(run.id) + '/evidence" download>Download evidence pack (JSON: run record, screenshots, SHA-256 of each file)</a>';
+    ev.style.display = "block";
     const rt = $("redteam");
     if (run.compromised && run.redTeamAttempts) {
       rt.style.display = "block";
@@ -140,7 +145,7 @@ function addEvent(e, runId){
 
 function watch(id, cfg){
   if (source) source.close();
-  $("log").innerHTML = ""; $("verdict").style.display = "none"; $("checks").style.display = "none"; $("redteam").style.display = "none"; $("shot").style.display = "none"; $("replaynote").style.display = "none"; $("approve").style.display = "none";
+  $("log").innerHTML = ""; $("verdict").style.display = "none"; $("checks").style.display = "none"; $("evidence").style.display = "none"; $("redteam").style.display = "none"; $("shot").style.display = "none"; $("replaynote").style.display = "none"; $("approve").style.display = "none";
   history.replaceState(null, "", "?run=" + id);
   source = new EventSource("/api/runs/" + id + "/events");
   // The server replays the whole run on every (re)connect, so start clean.
@@ -184,7 +189,7 @@ async function replay(id, cfg, why){
   if (!id) { $("log").innerHTML = '<div class="ev error">' + esc(why) + '</div>'; setBusy(false); return; }
   const run = await (await fetch("/api/runs/" + id)).json();
   if (source) source.close();
-  $("log").innerHTML = ""; $("verdict").style.display = "none"; $("checks").style.display = "none"; $("redteam").style.display = "none"; $("shot").style.display = "none";
+  $("log").innerHTML = ""; $("verdict").style.display = "none"; $("checks").style.display = "none"; $("evidence").style.display = "none"; $("redteam").style.display = "none"; $("shot").style.display = "none";
   counts = { egress: 0, policy: 0, teardown: false };
   const note = $("replaynote");
   note.textContent = why + " Showing a replay of real run " + run.id + " from " + new Date(run.startedAt).toLocaleString() + ", sped up.";

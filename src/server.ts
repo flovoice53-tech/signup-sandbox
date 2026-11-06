@@ -5,7 +5,7 @@ import { appendFile, readFile, readdir, writeFile } from "node:fs/promises";
 import { createReadStream, existsSync } from "node:fs";
 import path from "node:path";
 import { DATA_DIR, decideApproval, executeRun, MAX_RUN_MS, newRunId, type Run, type RunEvent } from "./agent.ts";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { DEMO_URL, demoEmailsLeft, sendAlertMail, startDemoSites } from "./demo-sites.ts";
 import { cleanupStale, BROWSER_RUNTIME, DRIVER, startJanitor } from "./sandbox.ts";
 import { MODEL } from "./llm.ts";
@@ -104,6 +104,49 @@ function featuredRun() {
   return [...runs.values()]
     .filter((r) => r.compromised && r.status === "passed" && r.redTeamAttempts && r.redTeamStopped === r.redTeamAttempts)
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
+}
+
+// Evidence pack for a finished run: the run record and every screenshot, each
+// with a SHA-256, so a verdict can be checked later. One JSON download.
+const MAX_EVIDENCE_SHOTS = 60;
+const sha256 = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
+async function evidencePack(run: Run, res: http.ServerResponse) {
+  if (run.status === "running") return json(res, 409, { error: "the run is still in progress" });
+  const record = JSON.stringify(run);
+  const shots: Record<string, { bytes: number; sha256: string; jpegBase64: string }> = {};
+  const missing: string[] = [];
+  const names = (await readdir(path.join(DATA_DIR, run.id)).catch(() => [] as string[]))
+    .filter((n) => /^step-\d+\.jpg$/.test(n))
+    .sort((a, b) => Number(a.match(/\d+/)![0]) - Number(b.match(/\d+/)![0]))
+    .slice(0, MAX_EVIDENCE_SHOTS);
+  for (const name of names) {
+    try {
+      const data = await readFile(path.join(DATA_DIR, run.id, name));
+      shots[name] = { bytes: data.length, sha256: sha256(data), jpegBase64: data.toString("base64") };
+    } catch {
+      missing.push(name);
+    }
+  }
+  const body = JSON.stringify(
+    {
+      format: "signup-sandbox-evidence/1",
+      runId: run.id,
+      status: run.status,
+      generatedAt: new Date().toISOString(),
+      verification: "sha256 of each file below; run.sha256 is the hash of the exact JSON text in run.json",
+      run: { sha256: sha256(record), json: record },
+      screenshots: shots,
+      missingScreenshots: missing,
+    },
+    null,
+    1,
+  );
+  res.writeHead(200, {
+    "content-type": "application/json",
+    "content-disposition": `attachment; filename="evidence-${run.id}.json"`,
+    "cache-control": "no-store",
+  });
+  res.end(body);
 }
 
 // "Want this on your own signup?" requests from the demo page: appended to
@@ -310,6 +353,7 @@ const server = http.createServer(async (req, res) => {
       if (!run) return json(res, 404, { error: "not found" });
       if (parts.length === 3) return json(res, 200, run);
       if (parts[3] === "events") return streamEvents(run, req, res);
+      if (parts[3] === "evidence" && req.method === "GET") return evidencePack(run, res);
       if (parts[3] === "approve" && req.method === "POST") {
         let body: { token?: string; approve?: boolean } = {};
         try {

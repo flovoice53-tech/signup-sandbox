@@ -219,6 +219,7 @@ Optional DNS canary for the benchmark: delegate a subdomain to the VM (an `A` re
 - `POST /api/monitor-request` `{"email", "url"}` → "request a monitor" form on the demo page (rate-limited)
 - `GET /api/runs/:id` → run with all events
 - `GET /api/runs/:id/events` → live Server-Sent Events
+- `GET /api/runs/:id/evidence` → evidence pack of a finished run, one JSON download: the run record, every screenshot (base64) and a SHA-256 for each file, so a verdict can be re-checked later (409 while the run is still going)
 - `GET /api/runs` → recent runs
 
 ## License
